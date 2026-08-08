@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mandelbrot Jetpack</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background: #0a0e27;
+            font-family: 'Courier New', monospace;
+            color: #e0e6ff;
+            overflow: hidden;
+            height: 100vh;
+        }
+
+        #glcanvas, #overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            display: block;
+        }
+
+        #overlay {
+            cursor: crosshair;
+        }
+
+        .controls {
+            position: fixed;
+            top: 24px;
+            left: 24px;
+            background: rgba(15, 18, 40, 0.95);
+            border: 1px solid rgba(224, 230, 255, 0.15);
+            border-radius: 8px;
+            padding: 16px;
+            font-size: 11px;
+            line-height: 1.8;
+            backdrop-filter: blur(8px);
+            max-width: 240px;
+            font-weight: 300;
+            letter-spacing: 0.5px;
+        }
+
+        .controls h3 {
+            font-size: 12px;
+            font-weight: 500;
+            margin-bottom: 10px;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            opacity: 0.7;
+        }
+
+        .stat-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 3px;
+            opacity: 0.8;
+        }
+
+        .value {
+            font-family: 'Monaco', monospace;
+            color: #7dd3fc;
+            font-weight: 400;
+        }
+
+        .info {
+            margin-top: 10px;
+            padding-top: 10px;
+            border-top: 1px solid rgba(224, 230, 255, 0.1);
+            opacity: 0.6;
+            font-size: 10px;
+        }
+
+        .key {
+            background: rgba(125, 211, 252, 0.1);
+            padding: 2px 4px;
+            border-radius: 2px;
+            font-weight: 500;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="glcanvas"></canvas>
+    <canvas id="overlay"></canvas>
+
+    <div class="controls">
+        <h3>Mandelbrot Jetpack</h3>
+        <div class="stat-row">
+            <span>Pos</span>
+            <span class="value" id="pos">0.00, 0.00</span>
+        </div>
+        <div class="stat-row">
+            <span>Vel</span>
+            <span class="value" id="vel">0.0 m/s</span>
+        </div>
+        <div class="stat-row">
+            <span>Fuel</span>
+            <span class="value" id="fuel">100%</span>
+        </div>
+        <div class="stat-row">
+            <span>Zoom</span>
+            <span class="value" id="zoomval">1.0×</span>
+        </div>
+        <div class="stat-row">
+            <span>Iter</span>
+            <span class="value" id="iterval">16</span>
+        </div>
+        <div class="stat-row">
+            <span>FPS</span>
+            <span class="value" id="fps">--</span>
+        </div>
+        <div class="info">
+            <span class="key">← →</span> move<br>
+            <span class="key">SPACE</span> jetpack<br>
+            <span class="key">scroll</span> zoom<br>
+            <span class="key">+ −</span> iterations<br>
+            <span class="key">R</span> reset<br>
+            Land on fractals!
+        </div>
+    </div>
+
+    <script>
+    'use strict';
+
+    // ---------- Canvases ----------
+    const glCanvas = document.getElementById('glcanvas');
+    const overlay = document.getElementById('overlay');
+    const octx = overlay.getContext('2d');
+
+    const gl = glCanvas.getContext('webgl2', {
+        antialias: false,
+        depth: false,
+        stencil: false,
+        alpha: false,
+        preserveDrawingBuffer: false
+    });
+
+    let w = 0, h = 0;
+    function resize() {
+        w = window.innerWidth;
+        h = window.innerHeight;
+        glCanvas.width = w;
+        glCanvas.height = h;
+        overlay.width = w;
+        overlay.height = h;
+        gl.viewport(0, 0, w, h);
+    }
+    window.addEventListener('resize', resize);
+
+    // ---------- Shaders ----------
+    // Fullscreen triangle; all the fractal math runs on the GPU.
+    const VS = `#version 300 es
+    void main() {
+        // Oversized triangle covering the viewport: no vertex buffer needed.
+        vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
+        gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+    }`;
+
+    const FS = `#version 300 es
+    precision highp float;
+
+    uniform vec2  uCenter;      // camera center in the complex plane
+    uniform vec2  uView;        // view width/height in complex units
+    uniform vec2  uRes;         // canvas resolution in pixels
+    uniform int   uMaxIter;
+
+    out vec4 fragColor;
+
+    vec3 hsv2rgb(vec3 c) {
+        vec3 p = abs(fract(c.xxx + vec3(0.0, 2.0/3.0, 1.0/3.0)) * 6.0 - 3.0);
+        return c.z * mix(vec3(1.0), clamp(p - 1.0, 0.0, 1.0), c.y);
+    }
+
+    void main() {
+        vec2 uv = gl_FragCoord.xy / uRes - 0.5;
+        // Screen-down = +y in world space (matches the physics).
+        vec2 c = uCenter + vec2(uv.x * uView.x, -uv.y * uView.y);
+
+        vec2 z = vec2(0.0);
+        int i = 0;
+        for (; i < uMaxIter; i++) {
+            z = vec2(z.x * z.x - z.y * z.y, 2.0 * z.x * z.y) + c;
+            if (dot(z, z) > 256.0) break;
+        }
+
+        if (i >= uMaxIter) {
+            fragColor = vec4(0.0, 0.0, 0.0, 1.0);
+            return;
+        }
+
+        // Smooth (fractional) iteration count for band-free coloring.
+        float mu = float(i) + 1.0 - log2(log2(dot(z, z)) * 0.5);
+        float t = clamp(mu / float(uMaxIter), 0.0, 1.0);
+
+        float hue = fract((t * 360.0 + 240.0) / 360.0);
+        float sat = 1.0;
+        float val = 0.35 + 0.65 * t;
+        fragColor = vec4(hsv2rgb(vec3(hue, sat, val)), 1.0);
+    }`;
+
+    function makeShader(type, src) {
+        const s = gl.createShader(type);
+        gl.shaderSource(s, src);
+        gl.compileShader(s);
+        if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+            throw new Error(gl.getShaderInfoLog(s));
+        }
+        return s;
+    }
+
+    const prog = gl.createProgram();
+    gl.attachShader(prog, makeShader(gl.VERTEX_SHADER, VS));
+    gl.attachShader(prog, makeShader(gl.FRAGMENT_SHADER, FS));
+    gl.linkProgram(prog);
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+        throw new Error(gl.getProgramInfoLog(prog));
+    }
+    gl.useProgram(prog);
+
+    const uCenter  = gl.getUniformLocation(prog, 'uCenter');
+    const uView    = gl.getUniformLocation(prog, 'uView');
+    const uRes     = gl.getUniformLocation(prog, 'uRes');
+    const uMaxIter = gl.getUniformLocation(prog, 'uMaxIter');
+
+    resize();
+
+    // ---------- Game state ----------
+    const player = {
+        x: -0.5,
+        y: -0.75,
+        vx: 0,
+        vy: 0,
+        radius: 0.001,
+        fuel: 100,
+        maxFuel: 100
+    };
+    const spawn = { x: player.x, y: player.y };
+
+    let maxIter = 16;
+
+    // Camera: zoom is the view width in complex units (smaller = closer).
+    let cameraX = player.x;
+    let cameraY = player.y;
+    let zoom = 3;
+
+    // Per-frame constants, normalized to a 60fps step via dt.
+    const GRAVITY = 0.00015;
+    const THRUST = 0.0004;
+    const MOVE = 0.00008;
+    const MAX_VEL = 0.001;
+    const FRICTION = 0.98;
+
+    // ---------- Input ----------
+    const keys = {};
+    let jetpackActive = false;
+
+    document.addEventListener('keydown', (e) => {
+        keys[e.key.toLowerCase()] = true;
+        if (e.key === ' ') {
+            e.preventDefault();
+            jetpackActive = true;
+        } else if (e.key.toLowerCase() === 'r') {
+            player.x = spawn.x;
+            player.y = spawn.y;
+            player.vx = 0;
+            player.vy = 0;
+            player.fuel = player.maxFuel;
+        } else if (e.key === '+' || e.key === '=') {
+            maxIter = Math.min(maxIter * 2, 4096);
+        } else if (e.key === '-' || e.key === '_') {
+            maxIter = Math.max(maxIter / 2, 4);
+        }
+    });
+
+    document.addEventListener('keyup', (e) => {
+        keys[e.key.toLowerCase()] = false;
+        if (e.key === ' ') jetpackActive = false;
+    });
+
+    document.addEventListener('wheel', (e) => {
+        e.preventDefault();
+        zoom *= e.deltaY > 0 ? 1.1 : 0.9;
+        zoom = Math.max(0.00001, Math.min(zoom, 10));
+    }, { passive: false });
+
+    // ---------- Physics ----------
+    // CPU-side mandelbrot, used only for a handful of collision samples per frame.
+    function insideSet(cr, ci) {
+        // Quick interior tests: main cardioid and period-2 bulb cover most
+        // of the set and let us skip the iteration loop entirely.
+        const q = (cr - 0.25) * (cr - 0.25) + ci * ci;
+        if (q * (q + (cr - 0.25)) <= 0.25 * ci * ci) return true;
+        if ((cr + 1) * (cr + 1) + ci * ci <= 0.0625) return true;
+
+        let zr = 0, zi = 0;
+        for (let i = 0; i < maxIter; i++) {
+            const zr2 = zr * zr;
+            const zi2 = zi * zi;
+            if (zr2 + zi2 > 4) return false;
+            zi = 2 * zr * zi + ci;
+            zr = zr2 - zi2 + cr;
+        }
+        return true;
+    }
+
+    function collides(x, y, r) {
+        if (insideSet(x, y)) return true;
+        for (let i = 0; i < 6; i++) {
+            const a = (i / 6) * Math.PI * 2;
+            if (insideSet(x + Math.cos(a) * r, y + Math.sin(a) * r)) return true;
+        }
+        return false;
+    }
+
+    function update(dt) {
+        if (keys['arrowleft'] || keys['a']) {
+            player.vx = Math.max(player.vx - MOVE * dt, -MAX_VEL);
+        }
+        if (keys['arrowright'] || keys['d']) {
+            player.vx = Math.min(player.vx + MOVE * dt, MAX_VEL);
+        }
+
+        if (jetpackActive && player.fuel > 0) {
+            player.vy -= THRUST * dt;
+            player.fuel = Math.max(0, player.fuel - 0.5 * dt);
+        } else {
+            player.fuel = Math.min(player.fuel + 0.2 * dt, player.maxFuel);
+        }
+
+        player.vy += GRAVITY * dt;
+        player.vy = Math.max(-MAX_VEL * 2, Math.min(player.vy, MAX_VEL * 2));
+        player.vx *= Math.pow(FRICTION, dt);
+
+        const oldX = player.x;
+        const oldY = player.y;
+        player.x += player.vx * dt;
+        player.y += player.vy * dt;
+
+        if (collides(player.x, player.y, player.radius)) {
+            // Step upward out of the surface and land there.
+            let y = player.y;
+            let resolved = false;
+            for (let i = 0; i < 60; i++) {
+                y -= player.radius * 0.5;
+                if (!collides(player.x, y, player.radius)) {
+                    resolved = true;
+                    break;
+                }
+            }
+            if (resolved) {
+                player.y = y;
+                player.vy = 0;
+                player.vx *= 0.8;
+            } else {
+                player.x = oldX;
+                player.y = oldY;
+                player.vx = 0;
+                player.vy = 0;
+            }
+        }
+
+        // Wrap horizontally across the interesting part of the plane.
+        if (player.x > 1) player.x = -2.5;
+        if (player.x < -2.5) player.x = 1;
+    }
+
+    // ---------- Rendering ----------
+    function renderFractal() {
+        const viewW = zoom;
+        const viewH = zoom * h / w;
+        gl.uniform2f(uCenter, cameraX, cameraY);
+        gl.uniform2f(uView, viewW, viewH);
+        gl.uniform2f(uRes, w, h);
+        gl.uniform1i(uMaxIter, maxIter);
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
+    }
+
+    function renderOverlay() {
+        octx.clearRect(0, 0, w, h);
+
+        const viewW = zoom;
+        const viewH = zoom * h / w;
+        const sx = (player.x - cameraX) / viewW * w + w / 2;
+        const sy = (player.y - cameraY) / viewH * h + h / 2;
+        // True size at this zoom, but never smaller than 3px so the
+        // player stays findable when zoomed way out.
+        const sr = Math.max(player.radius / viewW * w, 3);
+
+        if (jetpackActive && player.fuel > 0) {
+            octx.fillStyle = 'rgba(255, 150, 0, 0.7)';
+            octx.fillRect(sx - sr * 0.35, sy + sr, sr * 0.7, sr * 1.6);
+            octx.fillStyle = 'rgba(255, 255, 80, 0.5)';
+            octx.fillRect(sx - sr * 0.2, sy + sr, sr * 0.4, sr);
+        }
+
+        octx.fillStyle = '#00ff88';
+        octx.beginPath();
+        octx.arc(sx, sy, sr, 0, Math.PI * 2);
+        octx.fill();
+        octx.strokeStyle = 'rgba(0, 0, 0, 0.5)';
+        octx.lineWidth = 1;
+        octx.stroke();
+    }
+
+    // ---------- HUD (throttled: DOM writes are not free) ----------
+    let hudTimer = 0;
+    let frames = 0;
+    let fpsValue = 0;
+    let fpsWindowStart = performance.now();
+
+    function updateHUD(now) {
+        frames++;
+        if (now - fpsWindowStart >= 500) {
+            fpsValue = Math.round(frames * 1000 / (now - fpsWindowStart));
+            frames = 0;
+            fpsWindowStart = now;
+        }
+        if (now - hudTimer < 100) return;
+        hudTimer = now;
+
+        document.getElementById('pos').textContent =
+            player.x.toFixed(4) + ', ' + player.y.toFixed(4);
+        const speed = Math.hypot(player.vx, player.vy);
+        document.getElementById('vel').textContent = (speed * 1000).toFixed(1) + ' m/s';
+        document.getElementById('fuel').textContent = Math.round(player.fuel) + '%';
+        document.getElementById('zoomval').textContent = (3 / zoom).toFixed(1) + '×';
+        document.getElementById('iterval').textContent = maxIter;
+        document.getElementById('fps').textContent = fpsValue;
+    }
+
+    // ---------- Main loop ----------
+    let last = performance.now();
+
+    function frame(now) {
+        // dt in units of one 60fps frame, clamped so tab-switches don't explode.
+        const dt = Math.min((now - last) / (1000 / 60), 3);
+        last = now;
+
+        update(dt);
+
+        // Smooth camera follow.
+        const follow = 1 - Math.pow(0.9, dt);
+        cameraX += (player.x - cameraX) * follow;
+        cameraY += (player.y - cameraY) * follow;
+
+        renderFractal();
+        renderOverlay();
+        updateHUD(now);
+
+        requestAnimationFrame(frame);
+    }
+
+    requestAnimationFrame(frame);
+    </script>
+</body>
+</html>

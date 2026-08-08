@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mandelbrot Explorer</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background: #0a0e27;
+            font-family: 'Courier New', monospace;
+            color: #e0e6ff;
+            overflow: hidden;
+            height: 100vh;
+        }
+
+        #canvas {
+            display: block;
+            cursor: grab;
+            width: 100%;
+            height: 100%;
+        }
+
+        #canvas:active {
+            cursor: grabbing;
+        }
+
+        .controls {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            background: rgba(15, 18, 40, 0.95);
+            border: 1px solid rgba(224, 230, 255, 0.15);
+            border-radius: 8px;
+            padding: 16px;
+            font-size: 12px;
+            line-height: 1.6;
+            backdrop-filter: blur(8px);
+            max-width: 280px;
+            font-weight: 300;
+            letter-spacing: 0.5px;
+        }
+
+        .controls h3 {
+            font-size: 13px;
+            font-weight: 500;
+            margin-bottom: 12px;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            opacity: 0.7;
+        }
+
+        .control-group {
+            margin-bottom: 12px;
+        }
+
+        .control-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 4px;
+        }
+
+        .label {
+            opacity: 0.6;
+        }
+
+        .value {
+            font-family: 'Monaco', monospace;
+            color: #7dd3fc;
+            font-weight: 400;
+        }
+
+        .info-text {
+            opacity: 0.5;
+            font-size: 11px;
+            line-height: 1.5;
+            margin-top: 12px;
+            padding-top: 12px;
+            border-top: 1px solid rgba(224, 230, 255, 0.1);
+        }
+    </style>
+</head>
+<body>
+    <canvas id="canvas"></canvas>
+
+    <div class="controls">
+        <h3>Mandelbrot</h3>
+        <div class="control-group">
+            <div class="control-row">
+                <span class="label">Zoom</span>
+                <span class="value" id="zoom">1.00×</span>
+            </div>
+            <div class="control-row">
+                <span class="label">X</span>
+                <span class="value" id="xval">-0.70</span>
+            </div>
+            <div class="control-row">
+                <span class="label">Y</span>
+                <span class="value" id="yval">0.00</span>
+            </div>
+        </div>
+        <div class="control-group">
+            <div class="control-row">
+                <span class="label">Iterations</span>
+                <span class="value" id="iterval">64</span>
+            </div>
+        </div>
+        <div class="info-text">
+            <strong>Controls:</strong><br>
+            Scroll to zoom<br>
+            Drag to pan<br>
+            +/– for depth<br>
+            R to reset
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+
+        let camera = {
+            x: -0.7,
+            y: 0,
+            zoom: 1,
+            maxIter: 64
+        };
+
+        const initial = { ...camera };
+
+        function resize() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+
+        function mandel(cr, ci) {
+            let zr = 0, zi = 0;
+            for (let i = 0; i < camera.maxIter; i++) {
+                const zr2 = zr * zr, zi2 = zi * zi;
+                if (zr2 + zi2 > 4) return i;
+                zi = 2 * zr * zi + ci;
+                zr = zr2 - zi2 + cr;
+            }
+            return camera.maxIter;
+        }
+
+        function render() {
+            resize();
+            const w = canvas.width, h = canvas.height;
+            const img = ctx.createImageData(w, h);
+            const data = img.data;
+
+            const aspect = w / h;
+            const zoom = camera.zoom;
+            const scale = 3.5 / zoom;
+            const sx = scale;
+            const sy = sx / aspect;
+
+            for (let y = 0; y < h; y++) {
+                const cy = camera.y + (y / h - 0.5) * sy;
+                for (let x = 0; x < w; x++) {
+                    const cx = camera.x + (x / w - 0.5) * sx;
+                    const iter = mandel(cx, cy);
+                    const t = iter / camera.maxIter;
+
+                    let r, g, b;
+                    if (iter === camera.maxIter) {
+                        r = g = b = 0;
+                    } else {
+                        const hue = (t * 360 + 240) % 360;
+                        const sat = 1;
+                        const lit = 0.5 + t * 0.35;
+
+                        const c = (1 - Math.abs(2 * lit - 1)) * sat;
+                        const x = c * (1 - Math.abs((hue / 60) % 2 - 1));
+                        const m = lit - c / 2;
+
+                        let rc = 0, gc = 0, bc = 0;
+                        if (hue < 60) { rc = c; gc = x; }
+                        else if (hue < 120) { rc = x; gc = c; }
+                        else if (hue < 180) { gc = c; bc = x; }
+                        else if (hue < 240) { gc = x; bc = c; }
+                        else if (hue < 300) { rc = x; bc = c; }
+                        else { rc = c; bc = x; }
+
+                        r = Math.round((rc + m) * 255);
+                        g = Math.round((gc + m) * 255);
+                        b = Math.round((bc + m) * 255);
+                    }
+
+                    const idx = (y * w + x) * 4;
+                    data[idx] = r;
+                    data[idx + 1] = g;
+                    data[idx + 2] = b;
+                    data[idx + 3] = 255;
+                }
+            }
+
+            ctx.putImageData(img, 0, 0);
+            updateUI();
+        }
+
+        function updateUI() {
+            document.getElementById('zoom').textContent = camera.zoom.toFixed(2) + '×';
+            document.getElementById('xval').textContent = camera.x.toFixed(5);
+            document.getElementById('yval').textContent = camera.y.toFixed(5);
+            document.getElementById('iterval').textContent = camera.maxIter;
+        }
+
+        canvas.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            const aspect = canvas.width / canvas.height;
+            const scale = 3.5 / camera.zoom;
+            const sx = scale, sy = scale / aspect;
+
+            const cx = camera.x + (e.clientX / canvas.width - 0.5) * sx;
+            const cy = camera.y + (e.clientY / canvas.height - 0.5) * sy;
+
+            const factor = e.deltaY > 0 ? 0.9 : 1.1;
+            camera.zoom *= factor;
+            camera.x = cx - (cx - camera.x) / factor;
+            camera.y = cy - (cy - camera.y) / factor;
+
+            render();
+        });
+
+        let dragging = false, dx0 = 0, dy0 = 0;
+        canvas.addEventListener('mousedown', e => {
+            dragging = true;
+            dx0 = e.clientX;
+            dy0 = e.clientY;
+        });
+
+        canvas.addEventListener('mousemove', e => {
+            if (!dragging) return;
+            const aspect = canvas.width / canvas.height;
+            const scale = 3.5 / camera.zoom;
+            const sx = scale, sy = scale / aspect;
+
+            const dx = (dx0 - e.clientX) / canvas.width * sx;
+            const dy = (dy0 - e.clientY) / canvas.height * sy;
+            camera.x += dx;
+            camera.y += dy;
+
+            dx0 = e.clientX;
+            dy0 = e.clientY;
+            render();
+        });
+
+        canvas.addEventListener('mouseup', () => dragging = false);
+        canvas.addEventListener('mouseleave', () => dragging = false);
+
+        document.addEventListener('keydown', e => {
+            if (e.key === '+' || e.key === '=') {
+                camera.maxIter = Math.min(camera.maxIter + 8, 2048);
+                render();
+            } else if (e.key === '-') {
+                camera.maxIter = Math.max(camera.maxIter - 8, 8);
+                render();
+            } else if (e.key === 'r' || e.key === 'R') {
+                camera = { ...initial };
+                render();
+            }
+        });
+
+        render();
+    </script>
+</body>
+</html>
