@@ -30,23 +30,26 @@
             cursor: crosshair;
         }
 
-        .controls {
+        .panel {
             position: fixed;
-            top: 24px;
-            left: 24px;
             background: rgba(15, 18, 40, 0.95);
             border: 1px solid rgba(224, 230, 255, 0.15);
             border-radius: 8px;
-            padding: 16px;
+            padding: 14px;
             font-size: 11px;
             line-height: 1.8;
             backdrop-filter: blur(8px);
-            max-width: 240px;
             font-weight: 300;
             letter-spacing: 0.5px;
         }
 
-        .controls h3 {
+        .controls {
+            top: 24px;
+            left: 24px;
+            max-width: 250px;
+        }
+
+        .panel h3 {
             font-size: 12px;
             font-weight: 500;
             margin-bottom: 10px;
@@ -82,13 +85,74 @@
             border-radius: 2px;
             font-weight: 500;
         }
+
+        /* Tuning panel */
+        .tuning {
+            top: 24px;
+            right: 24px;
+            width: 270px;
+            max-height: calc(100vh - 48px);
+            overflow-y: auto;
+        }
+
+        .tuning summary {
+            font-size: 12px;
+            font-weight: 500;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            opacity: 0.7;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .tuning .group-title {
+            margin: 10px 0 2px;
+            font-size: 10px;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            opacity: 0.45;
+        }
+
+        .slider-row {
+            margin-bottom: 2px;
+        }
+
+        .slider-row label {
+            display: flex;
+            justify-content: space-between;
+            opacity: 0.8;
+        }
+
+        .slider-row input[type=range] {
+            width: 100%;
+            height: 14px;
+            accent-color: #7dd3fc;
+        }
+
+        .tuning button {
+            margin-top: 10px;
+            width: 100%;
+            background: rgba(125, 211, 252, 0.12);
+            border: 1px solid rgba(125, 211, 252, 0.3);
+            border-radius: 4px;
+            color: #7dd3fc;
+            font-family: inherit;
+            font-size: 11px;
+            letter-spacing: 1px;
+            padding: 5px;
+            cursor: pointer;
+        }
+
+        .tuning button:hover {
+            background: rgba(125, 211, 252, 0.25);
+        }
     </style>
 </head>
 <body>
     <canvas id="glcanvas"></canvas>
     <canvas id="overlay"></canvas>
 
-    <div class="controls">
+    <div class="panel controls">
         <h3>Mandelbrot Jetpack</h3>
         <div class="stat-row">
             <span>Pos</span>
@@ -107,16 +171,12 @@
             <span class="value" id="zoomval">1.0×</span>
         </div>
         <div class="stat-row">
-            <span>Iter</span>
-            <span class="value" id="iterval">16</span>
-        </div>
-        <div class="stat-row">
             <span>FPS</span>
             <span class="value" id="fps">--</span>
         </div>
         <div class="info">
             <span class="key">← →</span> move<br>
-            <span class="key">SPACE</span> jetpack<br>
+            <span class="key">SPACE</span> jetpack (away from core)<br>
             <span class="key">scroll</span> zoom<br>
             <span class="key">+ −</span> iterations<br>
             <span class="key">R</span> reset<br>
@@ -124,8 +184,137 @@
         </div>
     </div>
 
+    <details class="panel tuning" open>
+        <summary>Tuning</summary>
+        <div id="sliders"></div>
+        <button id="resetTuning">restore defaults</button>
+    </details>
+
     <script>
     'use strict';
+
+    // ---------- Tunables ----------
+    const DEFAULTS = {
+        // physics
+        gravity: 1.32e-9,
+        thrust: 2.64e-9,
+        move: 1e-9,
+        maxSpeed: 1e-8,
+        friction: 0.91,
+        landDamp: 0.8,
+        stepUp: 3,
+        // player
+        radius: 5e-9,
+        fuelBurn: 0.5,
+        fuelRegen: 0.2,
+        // fractal
+        iterations: 64,
+        coreX: -0.5,
+        coreY: 0,
+        hueOffset: 240,
+        hueSpan: 1,
+        // camera
+        camFollow: 0.1,
+        rotFollow: 0.1
+    };
+    const CFG = { ...DEFAULTS };
+
+    const SLIDER_DEFS = [
+        { group: 'Physics' },
+        { key: 'gravity',   label: 'Gravity',        min: 1e-11, max: 2e-7, log: true },
+        { key: 'thrust',    label: 'Jetpack thrust', min: 2e-11, max: 4e-7, log: true },
+        { key: 'move',      label: 'Move accel',     min: 1e-11, max: 1e-7, log: true },
+        { key: 'maxSpeed',  label: 'Max speed',      min: 1e-10, max: 1e-6, log: true },
+        { key: 'friction',  label: 'Air drag (1 = none)', min: 0.5, max: 1, step: 0.001 },
+        { key: 'landDamp',  label: 'Landing damp',   min: 0.5,   max: 1,    step: 0.01 },
+        { key: 'stepUp',    label: 'Climb assist (radii)', min: 0, max: 10, step: 1 },
+        { group: 'Player' },
+        { key: 'radius',    label: 'Player size',    min: 5e-11, max: 5e-4, log: true },
+        { key: 'fuelBurn',  label: 'Fuel burn',      min: 0,     max: 2,    step: 0.05 },
+        { key: 'fuelRegen', label: 'Fuel regen',     min: 0,     max: 2,    step: 0.05 },
+        { group: 'Fractal' },
+        { key: 'iterations', label: 'Iterations',    min: 4,     max: 2048, log: true, int: true },
+        { key: 'coreX',     label: 'Gravity core X', min: -2,    max: 1,    step: 0.01 },
+        { key: 'coreY',     label: 'Gravity core Y', min: -1.2,  max: 1.2,  step: 0.01 },
+        { key: 'hueOffset', label: 'Hue offset',     min: 0,     max: 360,  step: 1 },
+        { key: 'hueSpan',   label: 'Hue span',       min: 0.1,   max: 4,    step: 0.05 },
+        { group: 'Camera' },
+        { key: 'camFollow', label: 'Follow speed',   min: 0.01,  max: 0.5,  step: 0.01 },
+        { key: 'rotFollow', label: 'Roll speed',     min: 0.01,  max: 0.5,  step: 0.01 }
+    ];
+
+    function fmtVal(v) {
+        if (Number.isInteger(v) && Math.abs(v) < 1e5) return String(v);
+        if (v !== 0 && Math.abs(v) < 0.01) return v.toExponential(2);
+        return v.toPrecision(3);
+    }
+
+    const sliderInputs = {};
+
+    function buildSliders() {
+        const host = document.getElementById('sliders');
+        for (const def of SLIDER_DEFS) {
+            if (def.group) {
+                const t = document.createElement('div');
+                t.className = 'group-title';
+                t.textContent = def.group;
+                host.appendChild(t);
+                continue;
+            }
+            const row = document.createElement('div');
+            row.className = 'slider-row';
+            const label = document.createElement('label');
+            const name = document.createElement('span');
+            name.textContent = def.label;
+            const val = document.createElement('span');
+            val.className = 'value';
+            label.append(name, val);
+
+            const input = document.createElement('input');
+            input.type = 'range';
+            if (def.log) {
+                input.min = Math.log10(def.min);
+                input.max = Math.log10(def.max);
+                input.step = 0.02;
+            } else {
+                input.min = def.min;
+                input.max = def.max;
+                input.step = def.step;
+            }
+
+            const show = () => { val.textContent = fmtVal(CFG[def.key]); };
+            const fromCfg = () => {
+                input.value = def.log ? Math.log10(CFG[def.key]) : CFG[def.key];
+                show();
+            };
+            input.addEventListener('input', () => {
+                let v = parseFloat(input.value);
+                if (def.log) v = Math.pow(10, v);
+                if (def.int) v = Math.round(v);
+                CFG[def.key] = v;
+                show();
+            });
+            // Give the keyboard back to the game after fiddling.
+            input.addEventListener('change', () => input.blur());
+
+            sliderInputs[def.key] = fromCfg;
+            fromCfg();
+            row.append(label, input);
+            host.appendChild(row);
+        }
+
+        document.getElementById('resetTuning').addEventListener('click', (e) => {
+            Object.assign(CFG, DEFAULTS);
+            syncSliders();
+            e.target.blur();
+        });
+    }
+
+    function syncSliders() {
+        for (const k in sliderInputs) sliderInputs[k]();
+    }
+
+    buildSliders();
 
     // ---------- Canvases ----------
     const glCanvas = document.getElementById('glcanvas');
@@ -161,13 +350,22 @@
         gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
     }`;
 
+    // Perturbation rendering: the CPU iterates one reference orbit at the
+    // camera center in float64 and uploads it as a texture. Each pixel only
+    // iterates its tiny delta from that orbit — deltas are on the order of
+    // the view size, so float32 keeps full relative precision at zoom depths
+    // where naive iteration turns into pixel soup. Rebasing (Zhuoran's
+    // method) keeps the delta small to avoid glitches.
     const FS = `#version 300 es
     precision highp float;
 
-    uniform vec2  uCenter;      // camera center in the complex plane
     uniform vec2  uView;        // view width/height in complex units
     uniform vec2  uRes;         // canvas resolution in pixels
+    uniform vec2  uRotCS;       // (cos, sin) of camera rotation
+    uniform vec2  uHue;         // (offset in degrees, span multiplier)
     uniform int   uMaxIter;
+    uniform int   uRefLen;      // valid entries in the reference orbit
+    uniform highp sampler2D uRefOrbit;
 
     out vec4 fragColor;
 
@@ -176,19 +374,45 @@
         return c.z * mix(vec3(1.0), clamp(p - 1.0, 0.0, 1.0), c.y);
     }
 
+    vec2 cmul(vec2 a, vec2 b) {
+        return vec2(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x);
+    }
+
     void main() {
         vec2 uv = gl_FragCoord.xy / uRes - 0.5;
-        // Screen-down = +y in world space (matches the physics).
-        vec2 c = uCenter + vec2(uv.x * uView.x, -uv.y * uView.y);
+        // Screen-down = +y in the camera frame; rotate the camera frame
+        // into world space so "down" always points at the fractal core.
+        // dc is the pixel's offset from the camera center (= reference).
+        vec2 d = vec2(uv.x * uView.x, -uv.y * uView.y);
+        vec2 dc = vec2(d.x * uRotCS.x - d.y * uRotCS.y,
+                       d.x * uRotCS.y + d.y * uRotCS.x);
 
-        vec2 z = vec2(0.0);
+        vec2 dz = vec2(0.0);   // delta from the reference orbit
+        vec2 z = vec2(0.0);    // full value, Z_m + dz
+        int m = 0;             // index into the reference orbit
+        bool escaped = false;
         int i = 0;
+
         for (; i < uMaxIter; i++) {
-            z = vec2(z.x * z.x - z.y * z.y, 2.0 * z.x * z.y) + c;
-            if (dot(z, z) > 256.0) break;
+            vec2 Z = texelFetch(uRefOrbit, ivec2(m, 0), 0).xy;
+            z = Z + dz;
+            float zz = dot(z, z);
+            if (zz > 256.0) { escaped = true; break; }
+
+            // Rebase when the full value is smaller than the delta, or the
+            // reference orbit ran out: restart the delta from the origin.
+            if (zz < dot(dz, dz) || m + 1 >= uRefLen) {
+                dz = z;
+                m = 0;
+                Z = vec2(0.0);
+            }
+
+            // dz' = 2*Z*dz + dz^2 + dc
+            dz = cmul(2.0 * Z + dz, dz) + dc;
+            m++;
         }
 
-        if (i >= uMaxIter) {
+        if (!escaped) {
             fragColor = vec4(0.0, 0.0, 0.0, 1.0);
             return;
         }
@@ -197,7 +421,7 @@
         float mu = float(i) + 1.0 - log2(log2(dot(z, z)) * 0.5);
         float t = clamp(mu / float(uMaxIter), 0.0, 1.0);
 
-        float hue = fract((t * 360.0 + 240.0) / 360.0);
+        float hue = fract((t * uHue.y * 360.0 + uHue.x) / 360.0);
         float sat = 1.0;
         float val = 0.35 + 0.65 * t;
         fragColor = vec4(hsv2rgb(vec3(hue, sat, val)), 1.0);
@@ -222,44 +446,76 @@
     }
     gl.useProgram(prog);
 
-    const uCenter  = gl.getUniformLocation(prog, 'uCenter');
-    const uView    = gl.getUniformLocation(prog, 'uView');
-    const uRes     = gl.getUniformLocation(prog, 'uRes');
-    const uMaxIter = gl.getUniformLocation(prog, 'uMaxIter');
+    const uView     = gl.getUniformLocation(prog, 'uView');
+    const uRes      = gl.getUniformLocation(prog, 'uRes');
+    const uRotCS    = gl.getUniformLocation(prog, 'uRotCS');
+    const uHue      = gl.getUniformLocation(prog, 'uHue');
+    const uMaxIter  = gl.getUniformLocation(prog, 'uMaxIter');
+    const uRefLen   = gl.getUniformLocation(prog, 'uRefLen');
+    const uRefOrbit = gl.getUniformLocation(prog, 'uRefOrbit');
+
+    // Reference orbit texture (RG32F, one row; index = iteration).
+    const MAX_ORBIT = 4097;
+    const refOrbit = new Float32Array(MAX_ORBIT * 2);
+    const refTex = gl.createTexture();
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, refTex);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.uniform1i(uRefOrbit, 0);
+
+    // Iterate the camera center in float64 and upload the orbit. Returns
+    // the number of valid entries.
+    function updateRefOrbit() {
+        const cr = cameraX, ci = cameraY;
+        refOrbit[0] = 0;
+        refOrbit[1] = 0;
+        let zr = 0, zi = 0;
+        let n = 1;
+        const cap = Math.min(CFG.iterations + 1, MAX_ORBIT);
+        while (n < cap) {
+            const zr2 = zr * zr, zi2 = zi * zi;
+            if (zr2 + zi2 > 1e20) break;
+            const nzi = 2 * zr * zi + ci;
+            zr = zr2 - zi2 + cr;
+            zi = nzi;
+            refOrbit[2 * n] = zr;
+            refOrbit[2 * n + 1] = zi;
+            n++;
+        }
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RG32F, n, 1, 0, gl.RG, gl.FLOAT,
+                      refOrbit.subarray(0, 2 * n));
+        return n;
+    }
 
     resize();
 
     // ---------- Game state ----------
     const player = {
         x: -0.5,
-        y: -0.75,
+        y: -0.613,
         vx: 0,
         vy: 0,
-        radius: 0.001,
         fuel: 100,
         maxFuel: 100
     };
     const spawn = { x: player.x, y: player.y };
 
-    let maxIter = 16;
-
     // Camera: zoom is the view width in complex units (smaller = closer).
     let cameraX = player.x;
     let cameraY = player.y;
     let zoom = 3;
-
-    // Per-frame constants, normalized to a 60fps step via dt.
-    const GRAVITY = 0.00015;
-    const THRUST = 0.0004;
-    const MOVE = 0.00008;
-    const MAX_VEL = 0.001;
-    const FRICTION = 0.98;
+    // Camera roll: rotates the view so gravity always points screen-down.
+    let camAngle = 0;
 
     // ---------- Input ----------
     const keys = {};
     let jetpackActive = false;
 
     document.addEventListener('keydown', (e) => {
+        if (e.target.tagName === 'INPUT' || e.target.tagName === 'BUTTON') return;
         keys[e.key.toLowerCase()] = true;
         if (e.key === ' ') {
             e.preventDefault();
@@ -271,9 +527,11 @@
             player.vy = 0;
             player.fuel = player.maxFuel;
         } else if (e.key === '+' || e.key === '=') {
-            maxIter = Math.min(maxIter * 2, 4096);
+            CFG.iterations = Math.min(CFG.iterations * 2, 4096);
+            syncSliders();
         } else if (e.key === '-' || e.key === '_') {
-            maxIter = Math.max(maxIter / 2, 4);
+            CFG.iterations = Math.max(CFG.iterations / 2, 4);
+            syncSliders();
         }
     });
 
@@ -285,7 +543,9 @@
     document.addEventListener('wheel', (e) => {
         e.preventDefault();
         zoom *= e.deltaY > 0 ? 1.1 : 0.9;
-        zoom = Math.max(0.00001, Math.min(zoom, 10));
+        // Perturbation rendering stays crisp far beyond float32 range;
+        // the deep limit guards double-precision camera coordinates.
+        zoom = Math.max(1e-13, Math.min(zoom, 10));
     }, { passive: false });
 
     // ---------- Physics ----------
@@ -297,6 +557,7 @@
         if (q * (q + (cr - 0.25)) <= 0.25 * ci * ci) return true;
         if ((cr + 1) * (cr + 1) + ci * ci <= 0.0625) return true;
 
+        const maxIter = CFG.iterations;
         let zr = 0, zi = 0;
         for (let i = 0; i < maxIter; i++) {
             const zr2 = zr * zr;
@@ -308,8 +569,9 @@
         return true;
     }
 
-    function collides(x, y, r) {
+    function collides(x, y) {
         if (insideSet(x, y)) return true;
+        const r = CFG.radius;
         for (let i = 0; i < 6; i++) {
             const a = (i / 6) * Math.PI * 2;
             if (insideSet(x + Math.cos(a) * r, y + Math.sin(a) * r)) return true;
@@ -317,66 +579,205 @@
         return false;
     }
 
+    // Unit vector pointing from the fractal core out to the player.
+    function outwardDir() {
+        const dx = player.x - CFG.coreX;
+        const dy = player.y - CFG.coreY;
+        const len = Math.hypot(dx, dy);
+        if (len < 1e-9) return { x: 0, y: -1 };
+        return { x: dx / len, y: dy / len };
+    }
+
+    // The world is microscopic now: locate the terrain below the spawn
+    // column and start a short hop above it — any fixed spawn height would
+    // mean an hours-long free-fall at this scale.
+    (function initSpawn() {
+        const x = spawn.x;
+        let y = -0.62;
+        const step = 1e-4;
+        let found = false;
+        for (let i = 0; i < 5000; i++) {
+            if (collides(x, y)) { found = true; break; }
+            y += step;
+        }
+        if (found) {
+            // Bisect back to the exact surface, then hover a bit above it.
+            let lo = y - step, hi = y;
+            for (let k = 0; k < 60; k++) {
+                const mid = (lo + hi) / 2;
+                if (collides(x, mid)) hi = mid; else lo = mid;
+            }
+            spawn.y = lo - CFG.radius * 400;
+        }
+        player.y = spawn.y;
+        cameraY = spawn.y;
+    })();
+
     function update(dt) {
+        const out = outwardDir();
+        // Tangent: "right" on screen, planet-style — it rotates with you
+        // as you walk around the core.
+        const tx = -out.y;
+        const ty = out.x;
+
         if (keys['arrowleft'] || keys['a']) {
-            player.vx = Math.max(player.vx - MOVE * dt, -MAX_VEL);
+            player.vx -= tx * CFG.move * dt;
+            player.vy -= ty * CFG.move * dt;
         }
         if (keys['arrowright'] || keys['d']) {
-            player.vx = Math.min(player.vx + MOVE * dt, MAX_VEL);
+            player.vx += tx * CFG.move * dt;
+            player.vy += ty * CFG.move * dt;
         }
 
         if (jetpackActive && player.fuel > 0) {
-            player.vy -= THRUST * dt;
-            player.fuel = Math.max(0, player.fuel - 0.5 * dt);
+            player.vx += out.x * CFG.thrust * dt;
+            player.vy += out.y * CFG.thrust * dt;
+            player.fuel = Math.max(0, player.fuel - CFG.fuelBurn * dt);
         } else {
-            player.fuel = Math.min(player.fuel + 0.2 * dt, player.maxFuel);
+            player.fuel = Math.min(player.fuel + CFG.fuelRegen * dt, player.maxFuel);
         }
 
-        player.vy += GRAVITY * dt;
-        player.vy = Math.max(-MAX_VEL * 2, Math.min(player.vy, MAX_VEL * 2));
-        player.vx *= Math.pow(FRICTION, dt);
+        // Gravity toward the core.
+        player.vx -= out.x * CFG.gravity * dt;
+        player.vy -= out.y * CFG.gravity * dt;
 
-        const oldX = player.x;
-        const oldY = player.y;
-        player.x += player.vx * dt;
-        player.y += player.vy * dt;
+        const drag = Math.pow(CFG.friction, dt);
+        player.vx *= drag;
+        player.vy *= drag;
 
-        if (collides(player.x, player.y, player.radius)) {
-            // Step upward out of the surface and land there.
-            let y = player.y;
-            let resolved = false;
-            for (let i = 0; i < 60; i++) {
-                y -= player.radius * 0.5;
-                if (!collides(player.x, y, player.radius)) {
-                    resolved = true;
-                    break;
+        // Clamp speed.
+        const speed = Math.hypot(player.vx, player.vy);
+        if (speed > CFG.maxSpeed) {
+            const s = CFG.maxSpeed / speed;
+            player.vx *= s;
+            player.vy *= s;
+        }
+
+        // If terrain appeared inside us (iteration/size slider change),
+        // push outward until free before moving at all.
+        if (collides(player.x, player.y)) {
+            for (let i = 0; i < 200 && collides(player.x, player.y); i++) {
+                player.x += out.x * CFG.radius * 2;
+                player.y += out.y * CFG.radius * 2;
+            }
+            player.vx = 0;
+            player.vy = 0;
+            return;
+        }
+
+        // Substepped movement: the player is tiny compared to per-frame
+        // travel, so a single-step move would tunnel straight through thin
+        // filaments. Advance in steps of at most 2 radii; on contact, try
+        // to climb small bumps, then to slide along the surface, and only
+        // then stop.
+        const r = CFG.radius;
+        const moveX = player.vx * dt;
+        const moveY = player.vy * dt;
+        const dist = Math.hypot(moveX, moveY);
+        const steps = Math.min(Math.max(1, Math.ceil(dist / (r * 2))), 400);
+        const sx = moveX / steps;
+        const sy = moveY / steps;
+
+        for (let i = 0; i < steps; i++) {
+            const nx = player.x + sx;
+            const ny = player.y + sy;
+            if (!collides(nx, ny)) {
+                player.x = nx;
+                player.y = ny;
+                continue;
+            }
+
+            const mt = sx * tx + sy * ty;
+            const mr = sx * out.x + sy * out.y;
+
+            // Climb assist: retry the same substep lifted outward a little,
+            // so surface roughness doesn't stop every walk. Only for
+            // walking (tangentially dominant) motion — lifting a falling
+            // player out of the ground would make them hover forever.
+            if (Math.abs(mt) > Math.abs(mr)) {
+                let stepped = false;
+                for (let s = 1; s <= CFG.stepUp; s++) {
+                    const cx = nx + out.x * r * s;
+                    const cy = ny + out.y * r * s;
+                    if (!collides(cx, cy)) {
+                        player.x = cx;
+                        player.y = cy;
+                        stepped = true;
+                        break;
+                    }
                 }
-            }
-            if (resolved) {
-                player.y = y;
-                player.vy = 0;
-                player.vx *= 0.8;
+                if (stepped) continue;
             } else {
-                player.x = oldX;
-                player.y = oldY;
-                player.vx = 0;
-                player.vy = 0;
+                // Wiggle assist, the radial mirror of climb assist: when
+                // thrusting out of (or falling into) a narrow notch, try the
+                // substep shifted sideways so the player can slip past
+                // overhangs instead of wedging under them.
+                let stepped = false;
+                for (let s = 1; s <= CFG.stepUp && !stepped; s++) {
+                    for (const sign of [1, -1]) {
+                        const cx = nx + tx * r * s * sign;
+                        const cy = ny + ty * r * s * sign;
+                        if (!collides(cx, cy)) {
+                            player.x = cx;
+                            player.y = cy;
+                            stepped = true;
+                            break;
+                        }
+                    }
+                }
+                if (stepped) continue;
             }
-        }
 
-        // Wrap horizontally across the interesting part of the plane.
-        if (player.x > 1) player.x = -2.5;
-        if (player.x < -2.5) player.x = 1;
+            // Slide: split the substep into tangential and radial parts and
+            // keep whichever component is free.
+            const tnx = player.x + tx * mt;
+            const tny = player.y + ty * mt;
+            if (!collides(tnx, tny)) {
+                player.x = tnx;
+                player.y = tny;
+                // Blocked radially: land — kill inward velocity.
+                const vr = player.vx * out.x + player.vy * out.y;
+                if (vr < 0) {
+                    player.vx -= vr * out.x;
+                    player.vy -= vr * out.y;
+                }
+                continue;
+            }
+            const rnx = player.x + out.x * mr;
+            const rny = player.y + out.y * mr;
+            if (mr !== 0 && !collides(rnx, rny)) {
+                player.x = rnx;
+                player.y = rny;
+                // Blocked tangentially: kill sideways velocity.
+                const vt = player.vx * tx + player.vy * ty;
+                player.vx -= vt * tx;
+                player.vy -= vt * ty;
+                continue;
+            }
+
+            // Fully blocked: land here.
+            const vr = player.vx * out.x + player.vy * out.y;
+            if (vr < 0) {
+                player.vx -= vr * out.x;
+                player.vy -= vr * out.y;
+            }
+            player.vx *= CFG.landDamp;
+            player.vy *= CFG.landDamp;
+            break;
+        }
     }
 
     // ---------- Rendering ----------
     function renderFractal() {
         const viewW = zoom;
         const viewH = zoom * h / w;
-        gl.uniform2f(uCenter, cameraX, cameraY);
+        const refLen = updateRefOrbit();
         gl.uniform2f(uView, viewW, viewH);
         gl.uniform2f(uRes, w, h);
-        gl.uniform1i(uMaxIter, maxIter);
+        gl.uniform2f(uRotCS, Math.cos(camAngle), Math.sin(camAngle));
+        gl.uniform2f(uHue, CFG.hueOffset, CFG.hueSpan);
+        gl.uniform1i(uMaxIter, CFG.iterations);
+        gl.uniform1i(uRefLen, refLen);
         gl.drawArrays(gl.TRIANGLES, 0, 3);
     }
 
@@ -385,13 +786,21 @@
 
         const viewW = zoom;
         const viewH = zoom * h / w;
-        const sx = (player.x - cameraX) / viewW * w + w / 2;
-        const sy = (player.y - cameraY) / viewH * h + h / 2;
+        // Inverse of the camera rotation: world delta -> screen delta.
+        const dxw = player.x - cameraX;
+        const dyw = player.y - cameraY;
+        const cosA = Math.cos(camAngle);
+        const sinA = Math.sin(camAngle);
+        const dxs = dxw * cosA + dyw * sinA;
+        const dys = -dxw * sinA + dyw * cosA;
+        const sx = dxs / viewW * w + w / 2;
+        const sy = dys / viewH * h + h / 2;
         // True size at this zoom, but never smaller than 3px so the
         // player stays findable when zoomed way out.
-        const sr = Math.max(player.radius / viewW * w, 3);
+        const sr = Math.max(CFG.radius / viewW * w, 3);
 
         if (jetpackActive && player.fuel > 0) {
+            // Thrust is screen-up by construction, so the flame is screen-down.
             octx.fillStyle = 'rgba(255, 150, 0, 0.7)';
             octx.fillRect(sx - sr * 0.35, sy + sr, sr * 0.7, sr * 1.6);
             octx.fillStyle = 'rgba(255, 255, 80, 0.5)';
@@ -426,10 +835,13 @@
         document.getElementById('pos').textContent =
             player.x.toFixed(4) + ', ' + player.y.toFixed(4);
         const speed = Math.hypot(player.vx, player.vy);
-        document.getElementById('vel').textContent = (speed * 1000).toFixed(1) + ' m/s';
+        document.getElementById('vel').textContent =
+            speed >= 1e-4 ? (speed * 1e3).toFixed(1) + ' m/s'
+                          : (speed * 1e9).toFixed(1) + ' nm/s';
         document.getElementById('fuel').textContent = Math.round(player.fuel) + '%';
-        document.getElementById('zoomval').textContent = (3 / zoom).toFixed(1) + '×';
-        document.getElementById('iterval').textContent = maxIter;
+        const mag = 3 / zoom;
+        document.getElementById('zoomval').textContent =
+            (mag >= 1e4 ? mag.toExponential(1) : mag.toFixed(1)) + '×';
         document.getElementById('fps').textContent = fpsValue;
     }
 
@@ -444,9 +856,18 @@
         update(dt);
 
         // Smooth camera follow.
-        const follow = 1 - Math.pow(0.9, dt);
+        const follow = 1 - Math.pow(1 - CFG.camFollow, dt);
         cameraX += (player.x - cameraX) * follow;
         cameraY += (player.y - cameraY) * follow;
+
+        // Roll the camera so the outward direction reads as screen-up
+        // (gravity screen-down), taking the short way around the circle.
+        const out = outwardDir();
+        const targetAngle = Math.atan2(out.x, -out.y);
+        let dA = targetAngle - camAngle;
+        while (dA > Math.PI) dA -= 2 * Math.PI;
+        while (dA < -Math.PI) dA += 2 * Math.PI;
+        camAngle += dA * (1 - Math.pow(1 - CFG.rotFollow, dt));
 
         renderFractal();
         renderOverlay();
@@ -456,6 +877,14 @@
     }
 
     requestAnimationFrame(frame);
+
+    // Debug hook for automated testing.
+    window._dbg = {
+        teleport(x, y) { player.x = x; player.y = y; player.vx = 0; player.vy = 0; },
+        state() { return { x: player.x, y: player.y, vx: player.vx, vy: player.vy, camAngle, zoom }; },
+        setZoom(z) { zoom = z; },
+        cfg: CFG
+    };
     </script>
 </body>
 </html>
