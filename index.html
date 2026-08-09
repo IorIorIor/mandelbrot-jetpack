@@ -28,6 +28,7 @@
 
         #overlay {
             cursor: crosshair;
+            touch-action: none;
         }
 
         .panel {
@@ -163,8 +164,12 @@
             <span class="value" id="vel">0.0 m/s</span>
         </div>
         <div class="stat-row">
-            <span>Fuel</span>
-            <span class="value" id="fuel">100%</span>
+            <span>Jump</span>
+            <span class="value" id="charge">ready</span>
+        </div>
+        <div class="stat-row">
+            <span>Orbs</span>
+            <span class="value" id="orbs">0</span>
         </div>
         <div class="stat-row">
             <span>Zoom</span>
@@ -176,11 +181,13 @@
         </div>
         <div class="info">
             <span class="key">← →</span> move<br>
-            <span class="key">SPACE</span> jetpack (away from core)<br>
+            <span class="key">hold click/touch</span> aim &amp; charge jump<br>
+            <span class="key">release</span> jump!<br>
+            <span class="key">SPACE</span> hold to charge straight up<br>
             <span class="key">scroll</span> zoom<br>
             <span class="key">+ −</span> iterations<br>
             <span class="key">R</span> reset<br>
-            Land on fractals!
+            Collect orbs · surf the gravity wells!
         </div>
     </div>
 
@@ -196,42 +203,55 @@
     // ---------- Tunables ----------
     const DEFAULTS = {
         // physics
-        gravity: 1.32e-9,
-        thrust: 2.64e-9,
-        move: 1e-9,
-        maxSpeed: 1e-8,
+        gravity: 1.32e-10,
+        move: 1e-10,
+        maxSpeed: 2e-8,
         friction: 0.91,
         landDamp: 0.8,
         stepUp: 3,
+        // jump
+        jumpMin: 2e-9,
+        jumpMax: 1.5e-8,
+        chargeTime: 1.0,
+        // gravity wells
+        wellStrength: 3e-9,
+        wellRadius: 1.2e-5,
+        wellDensity: 0.35,
         // player
-        radius: 5e-9,
-        fuelBurn: 0.5,
-        fuelRegen: 0.2,
+        radius: 5e-10,
         // fractal
-        iterations: 64,
+        iterations: 124,
         coreX: -0.5,
         coreY: 0,
         hueOffset: 240,
         hueSpan: 1,
         // camera
         camFollow: 0.1,
-        rotFollow: 0.1
+        rotFollow: 0.1,
+        aa: 1,
+        // feel
+        volume: 0.5
     };
     const CFG = { ...DEFAULTS };
 
     const SLIDER_DEFS = [
         { group: 'Physics' },
-        { key: 'gravity',   label: 'Gravity',        min: 1e-11, max: 2e-7, log: true },
-        { key: 'thrust',    label: 'Jetpack thrust', min: 2e-11, max: 4e-7, log: true },
-        { key: 'move',      label: 'Move accel',     min: 1e-11, max: 1e-7, log: true },
-        { key: 'maxSpeed',  label: 'Max speed',      min: 1e-10, max: 1e-6, log: true },
+        { key: 'gravity',   label: 'Gravity',        min: 1e-12, max: 2e-7, log: true },
+        { key: 'move',      label: 'Move accel',     min: 1e-12, max: 1e-7, log: true },
+        { key: 'maxSpeed',  label: 'Max speed',      min: 1e-11, max: 1e-6, log: true },
         { key: 'friction',  label: 'Air drag (1 = none)', min: 0.5, max: 1, step: 0.001 },
         { key: 'landDamp',  label: 'Landing damp',   min: 0.5,   max: 1,    step: 0.01 },
         { key: 'stepUp',    label: 'Climb assist (radii)', min: 0, max: 10, step: 1 },
+        { group: 'Jump' },
+        { key: 'jumpMin',   label: 'Jump min speed', min: 1e-10, max: 1e-7, log: true },
+        { key: 'jumpMax',   label: 'Jump max speed', min: 1e-9,  max: 1e-6, log: true },
+        { key: 'chargeTime', label: 'Charge time (s)', min: 0.2, max: 3,    step: 0.1 },
+        { group: 'Gravity wells' },
+        { key: 'wellStrength', label: 'Well strength', min: 1e-11, max: 3e-8, log: true },
+        { key: 'wellRadius', label: 'Well radius',   min: 1e-6,  max: 5e-5, log: true },
+        { key: 'wellDensity', label: 'Well density', min: 0,     max: 0.8,  step: 0.05 },
         { group: 'Player' },
-        { key: 'radius',    label: 'Player size',    min: 5e-11, max: 5e-4, log: true },
-        { key: 'fuelBurn',  label: 'Fuel burn',      min: 0,     max: 2,    step: 0.05 },
-        { key: 'fuelRegen', label: 'Fuel regen',     min: 0,     max: 2,    step: 0.05 },
+        { key: 'radius',    label: 'Player size',    min: 5e-12, max: 5e-4, log: true },
         { group: 'Fractal' },
         { key: 'iterations', label: 'Iterations',    min: 4,     max: 2048, log: true, int: true },
         { key: 'coreX',     label: 'Gravity core X', min: -2,    max: 1,    step: 0.01 },
@@ -240,7 +260,10 @@
         { key: 'hueSpan',   label: 'Hue span',       min: 0.1,   max: 4,    step: 0.05 },
         { group: 'Camera' },
         { key: 'camFollow', label: 'Follow speed',   min: 0.01,  max: 0.5,  step: 0.01 },
-        { key: 'rotFollow', label: 'Roll speed',     min: 0.01,  max: 0.5,  step: 0.01 }
+        { key: 'rotFollow', label: 'Roll speed',     min: 0.01,  max: 0.5,  step: 0.01 },
+        { key: 'aa',        label: 'Antialias (SSAA ×)', min: 1, max: 4,    step: 0.5 },
+        { group: 'Feel' },
+        { key: 'volume',    label: 'Sound volume',   min: 0,     max: 1,    step: 0.05 }
     ];
 
     function fmtVal(v) {
@@ -329,15 +352,25 @@
         preserveDrawingBuffer: false
     });
 
+    // w/h are CSS pixels; the GL canvas renders at dpr * SSAA scale and the
+    // browser's downscale does the antialiasing.
     let w = 0, h = 0;
+    let renderScale = 1;
     function resize() {
         w = window.innerWidth;
         h = window.innerHeight;
-        glCanvas.width = w;
-        glCanvas.height = h;
-        overlay.width = w;
-        overlay.height = h;
-        gl.viewport(0, 0, w, h);
+        const dpr = window.devicePixelRatio || 1;
+        renderScale = dpr * (CFG.aa || 1);
+        glCanvas.width = Math.round(w * renderScale);
+        glCanvas.height = Math.round(h * renderScale);
+        glCanvas.style.width = w + 'px';
+        glCanvas.style.height = h + 'px';
+        overlay.width = Math.round(w * dpr);
+        overlay.height = Math.round(h * dpr);
+        overlay.style.width = w + 'px';
+        overlay.style.height = h + 'px';
+        octx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        gl.viewport(0, 0, glCanvas.width, glCanvas.height);
     }
     window.addEventListener('resize', resize);
 
@@ -365,6 +398,7 @@
     uniform vec2  uHue;         // (offset in degrees, span multiplier)
     uniform int   uMaxIter;
     uniform int   uRefLen;      // valid entries in the reference orbit
+    uniform float uPix;         // pixel size in complex units
     uniform highp sampler2D uRefOrbit;
 
     out vec4 fragColor;
@@ -389,6 +423,7 @@
 
         vec2 dz = vec2(0.0);   // delta from the reference orbit
         vec2 z = vec2(0.0);    // full value, Z_m + dz
+        vec2 der = vec2(0.0);  // d(z)/d(c), for the distance estimate
         int m = 0;             // index into the reference orbit
         bool escaped = false;
         int i = 0;
@@ -398,6 +433,9 @@
             z = Z + dz;
             float zz = dot(z, z);
             if (zz > 256.0) { escaped = true; break; }
+
+            // Derivative uses the full value: der' = 2*z*der + 1.
+            der = 2.0 * cmul(z, der) + vec2(1.0, 0.0);
 
             // Rebase when the full value is smaller than the delta, or the
             // reference orbit ran out: restart the delta from the origin.
@@ -424,7 +462,123 @@
         float hue = fract((t * uHue.y * 360.0 + uHue.x) / 360.0);
         float sat = 1.0;
         float val = 0.35 + 0.65 * t;
-        fragColor = vec4(hsv2rgb(vec3(hue, sat, val)), 1.0);
+        vec3 rgb = hsv2rgb(vec3(hue, sat, val));
+
+        // Analytic antialiasing: the distance estimate tells us how close
+        // the set's boundary passes; fade to the interior color within a
+        // pixel of it. Softens silhouettes and hairline filaments without
+        // supersampling.
+        float dm = length(der);
+        if (dm > 0.0) {
+            float zm = sqrt(dot(z, z));
+            float dist = zm * log(zm) / dm;
+            rgb *= clamp(dist / uPix, 0.0, 1.0);
+        }
+
+        fragColor = vec4(rgb, 1.0);
+    }`;
+
+    // Bake shader: renders one axis-aligned tile of the plane into an
+    // RG16F texture as (t = smooth-iteration fraction, dist = DE in world
+    // units). Interior encodes as (1, 0) — the composite multiplies color
+    // by clamp(dist/pixel), so dist 0 is black with no branching.
+    const FS_BAKE = `#version 300 es
+    precision highp float;
+
+    uniform float uSpan;        // tile width/height in complex units
+    uniform int   uMaxIter;
+    uniform int   uRefLen;
+    uniform highp sampler2D uRefOrbit;
+
+    out vec4 fragColor;
+
+    vec2 cmul(vec2 a, vec2 b) {
+        return vec2(a.x * b.x - a.y * b.y, a.x * b.y + a.y * b.x);
+    }
+
+    void main() {
+        vec2 uv = gl_FragCoord.xy / vec2(256.0);
+        vec2 dc = (uv - 0.5) * uSpan;
+
+        vec2 dz = vec2(0.0);
+        vec2 z = vec2(0.0);
+        vec2 der = vec2(0.0);
+        int m = 0;
+        bool escaped = false;
+        int i = 0;
+
+        for (; i < uMaxIter; i++) {
+            vec2 Z = texelFetch(uRefOrbit, ivec2(m, 0), 0).xy;
+            z = Z + dz;
+            float zz = dot(z, z);
+            if (zz > 256.0) { escaped = true; break; }
+            der = 2.0 * cmul(z, der) + vec2(1.0, 0.0);
+            if (zz < dot(dz, dz) || m + 1 >= uRefLen) {
+                dz = z;
+                m = 0;
+                Z = vec2(0.0);
+            }
+            dz = cmul(2.0 * Z + dz, dz) + dc;
+            m++;
+        }
+
+        if (!escaped) {
+            fragColor = vec4(1.0, 0.0, 0.0, 0.0);
+            return;
+        }
+
+        float mu = float(i) + 1.0 - log2(log2(dot(z, z)) * 0.5);
+        float t = clamp(mu / float(uMaxIter), 0.0, 1.0);
+        float dist = 0.0;
+        float dm = length(der);
+        if (dm > 0.0) {
+            float zm = sqrt(dot(z, z));
+            dist = zm * log(zm) / dm;
+        }
+        // Store distance in tile-texel units: O(1) values survive RG16F at
+        // any zoom depth (world units underflow half-float subnormals).
+        fragColor = vec4(t, dist * 256.0 / uSpan, 0.0, 0.0);
+    }`;
+
+    // Composite: draws one tile quad (already transformed to NDC by the
+    // CPU, camera rotation included) and colors the stored (t, dist).
+    const VS_COMP = `#version 300 es
+    uniform vec2 uOrigin;   // NDC position of the tile's (0,0) corner
+    uniform vec2 uAx;       // NDC vector along tile +x
+    uniform vec2 uAy;       // NDC vector along tile +y
+    uniform vec2 uUV0;      // uv window offset (ancestor fallback)
+    uniform float uUVs;     // uv window scale
+    out vec2 vUV;
+
+    void main() {
+        vec2 v = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1));
+        vUV = uUV0 + v * uUVs;
+        vec2 p = uOrigin + v.x * uAx + v.y * uAy;
+        gl_Position = vec4(p, 0.0, 1.0);
+    }`;
+
+    const FS_COMP = `#version 300 es
+    precision highp float;
+
+    uniform highp sampler2D uTex;
+    uniform vec2  uHue;
+    uniform float uPixW;    // world size of one screen pixel (for DE fade)
+    uniform float uTexelW;  // world size of one texel in the sampled tile
+    in vec2 vUV;
+    out vec4 fragColor;
+
+    vec3 hsv2rgb(vec3 c) {
+        vec3 p = abs(fract(c.xxx + vec3(0.0, 2.0/3.0, 1.0/3.0)) * 6.0 - 3.0);
+        return c.z * mix(vec3(1.0), clamp(p - 1.0, 0.0, 1.0), c.y);
+    }
+
+    void main() {
+        vec2 td = texture(uTex, vUV).xy;
+        float t = td.x;
+        float hue = fract((t * uHue.y * 360.0 + uHue.x) / 360.0);
+        vec3 rgb = hsv2rgb(vec3(hue, 1.0, 0.35 + 0.65 * t));
+        rgb *= clamp(td.y * uTexelW / uPixW, 0.0, 1.0);
+        fragColor = vec4(rgb, 1.0);
     }`;
 
     function makeShader(type, src) {
@@ -452,7 +606,46 @@
     const uHue      = gl.getUniformLocation(prog, 'uHue');
     const uMaxIter  = gl.getUniformLocation(prog, 'uMaxIter');
     const uRefLen   = gl.getUniformLocation(prog, 'uRefLen');
+    const uPix      = gl.getUniformLocation(prog, 'uPix');
     const uRefOrbit = gl.getUniformLocation(prog, 'uRefOrbit');
+
+    // Tile pipeline programs (need renderable float textures).
+    const extCBF = gl.getExtension('EXT_color_buffer_float');
+    let progBake = null, progComp = null;
+    let B = {}, C = {};
+    if (extCBF) {
+        progBake = gl.createProgram();
+        gl.attachShader(progBake, makeShader(gl.VERTEX_SHADER, VS));
+        gl.attachShader(progBake, makeShader(gl.FRAGMENT_SHADER, FS_BAKE));
+        gl.linkProgram(progBake);
+        progComp = gl.createProgram();
+        gl.attachShader(progComp, makeShader(gl.VERTEX_SHADER, VS_COMP));
+        gl.attachShader(progComp, makeShader(gl.FRAGMENT_SHADER, FS_COMP));
+        gl.linkProgram(progComp);
+        if (!gl.getProgramParameter(progBake, gl.LINK_STATUS) ||
+            !gl.getProgramParameter(progComp, gl.LINK_STATUS)) {
+            console.error('tile shaders failed to link, using direct rendering');
+            progBake = progComp = null;
+        } else {
+            B = {
+                span: gl.getUniformLocation(progBake, 'uSpan'),
+                maxIter: gl.getUniformLocation(progBake, 'uMaxIter'),
+                refLen: gl.getUniformLocation(progBake, 'uRefLen'),
+                refOrbit: gl.getUniformLocation(progBake, 'uRefOrbit')
+            };
+            C = {
+                origin: gl.getUniformLocation(progComp, 'uOrigin'),
+                ax: gl.getUniformLocation(progComp, 'uAx'),
+                ay: gl.getUniformLocation(progComp, 'uAy'),
+                uv0: gl.getUniformLocation(progComp, 'uUV0'),
+                uvs: gl.getUniformLocation(progComp, 'uUVs'),
+                tex: gl.getUniformLocation(progComp, 'uTex'),
+                hue: gl.getUniformLocation(progComp, 'uHue'),
+                pixW: gl.getUniformLocation(progComp, 'uPixW'),
+                texelW: gl.getUniformLocation(progComp, 'uTexelW')
+            };
+        }
+    }
 
     // Reference orbit texture (RG32F, one row; index = iteration).
     const MAX_ORBIT = 4097;
@@ -466,10 +659,11 @@
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     gl.uniform1i(uRefOrbit, 0);
 
-    // Iterate the camera center in float64 and upload the orbit. Returns
+    // Iterate a reference point in float64 and upload the orbit. Returns
     // the number of valid entries.
-    function updateRefOrbit() {
-        const cr = cameraX, ci = cameraY;
+    function updateRefOrbit(cr, ci) {
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, refTex);
         refOrbit[0] = 0;
         refOrbit[1] = 0;
         let zr = 0, zi = 0;
@@ -497,9 +691,7 @@
         x: -0.5,
         y: -0.613,
         vx: 0,
-        vy: 0,
-        fuel: 100,
-        maxFuel: 100
+        vy: 0
     };
     const spawn = { x: player.x, y: player.y };
 
@@ -507,46 +699,153 @@
     let cameraX = player.x;
     let cameraY = player.y;
     let zoom = 3;
+    let zoomTarget = 3;
     // Camera roll: rotates the view so gravity always points screen-down.
     let camAngle = 0;
 
     // ---------- Input ----------
     const keys = {};
-    let jetpackActive = false;
+
+    // Charge-and-aim jump state. Direction comes from the pointer position
+    // relative to the player (or straight screen-up for the space key);
+    // strength comes from how long the charge was held.
+    const jump = {
+        charging: false,
+        viaKey: false,
+        charge: 0,
+        aimX: 0,
+        aimY: 0
+    };
+    let jumpFlash = null;
+    // Largest inward speed killed by a landing this frame (drives juice).
+    let impactThisFrame = 0;
 
     document.addEventListener('keydown', (e) => {
         if (e.target.tagName === 'INPUT' || e.target.tagName === 'BUTTON') return;
         keys[e.key.toLowerCase()] = true;
         if (e.key === ' ') {
             e.preventDefault();
-            jetpackActive = true;
+            if (!jump.charging) {
+                audioInit();
+                jump.charging = true;
+                jump.viaKey = true;
+                jump.charge = 0;
+                sndChargeStart();
+            }
         } else if (e.key.toLowerCase() === 'r') {
             player.x = spawn.x;
             player.y = spawn.y;
             player.vx = 0;
             player.vy = 0;
-            player.fuel = player.maxFuel;
         } else if (e.key === '+' || e.key === '=') {
             CFG.iterations = Math.min(CFG.iterations * 2, 4096);
             syncSliders();
         } else if (e.key === '-' || e.key === '_') {
-            CFG.iterations = Math.max(CFG.iterations / 2, 4);
+            CFG.iterations = Math.max(Math.round(CFG.iterations / 2), 4);
             syncSliders();
         }
     });
 
     document.addEventListener('keyup', (e) => {
         keys[e.key.toLowerCase()] = false;
-        if (e.key === ' ') jetpackActive = false;
+        if (e.key === ' ' && jump.charging && jump.viaKey) executeJump();
+    });
+
+    // Pointer (mouse/touch) aiming: press and hold anywhere on the canvas.
+    overlay.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        audioInit();
+        jump.charging = true;
+        jump.viaKey = false;
+        jump.charge = 0;
+        jump.aimX = e.clientX;
+        jump.aimY = e.clientY;
+        sndChargeStart();
+    });
+    window.addEventListener('pointermove', (e) => {
+        if (jump.charging && !jump.viaKey) {
+            jump.aimX = e.clientX;
+            jump.aimY = e.clientY;
+        }
+    });
+    window.addEventListener('pointerup', () => {
+        if (jump.charging && !jump.viaKey) executeJump();
+    });
+    window.addEventListener('pointercancel', () => {
+        jump.charging = false;
+        jump.charge = 0;
+        sndChargeStop();
     });
 
     document.addEventListener('wheel', (e) => {
         e.preventDefault();
-        zoom *= e.deltaY > 0 ? 1.1 : 0.9;
-        // Perturbation rendering stays crisp far beyond float32 range;
-        // the deep limit guards double-precision camera coordinates.
-        zoom = Math.max(1e-13, Math.min(zoom, 10));
+        // Wheel drives a target; the frame loop eases the real zoom toward
+        // it, which reads smoother and gives tiles time to bake in.
+        zoomTarget *= e.deltaY > 0 ? 1.1 : 0.9;
+        // Magnification (3/zoom) ranges 1x to 2.0e7x.
+        zoomTarget = Math.max(1.5e-7, Math.min(zoomTarget, 3));
     }, { passive: false });
+
+    // ---------- Audio (tiny WebAudio synth, lazy init on first gesture) ----------
+    let audio = null;
+    function audioInit() {
+        if (audio) return;
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (!AC) return;
+        const ctx = new AC();
+        const master = ctx.createGain();
+        master.gain.value = 1;
+        master.connect(ctx.destination);
+        audio = { ctx, master, chargeOsc: null, chargeGain: null };
+    }
+
+    function blip(freq0, freq1, dur, type, gain) {
+        if (!audio || CFG.volume <= 0) return;
+        const t = audio.ctx.currentTime;
+        const o = audio.ctx.createOscillator();
+        const g = audio.ctx.createGain();
+        o.type = type;
+        o.frequency.setValueAtTime(freq0, t);
+        o.frequency.exponentialRampToValueAtTime(Math.max(freq1, 1), t + dur);
+        g.gain.setValueAtTime(gain * CFG.volume, t);
+        g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+        o.connect(g);
+        g.connect(audio.master);
+        o.start(t);
+        o.stop(t + dur + 0.02);
+    }
+
+    function sndJump(c) { blip(180 + c * 140, 480 + 620 * c, 0.18, 'triangle', 0.22); }
+    function sndLand(i) { blip(140, 50, 0.14, 'sine', 0.08 + 0.3 * i); }
+    function sndOrb() {
+        blip(880, 1318, 0.11, 'sine', 0.2);
+        setTimeout(() => blip(1318, 1760, 0.14, 'sine', 0.16), 70);
+    }
+
+    function sndChargeStart() {
+        if (!audio || CFG.volume <= 0) return;
+        sndChargeStop();
+        const o = audio.ctx.createOscillator();
+        const g = audio.ctx.createGain();
+        o.type = 'sine';
+        o.frequency.value = 150;
+        g.gain.value = 0.05 * CFG.volume;
+        o.connect(g);
+        g.connect(audio.master);
+        o.start();
+        audio.chargeOsc = o;
+        audio.chargeGain = g;
+    }
+
+    function sndChargeStop() {
+        if (audio && audio.chargeOsc) {
+            try { audio.chargeOsc.stop(); } catch (e) {}
+            audio.chargeOsc.disconnect();
+            audio.chargeGain.disconnect();
+            audio.chargeOsc = null;
+            audio.chargeGain = null;
+        }
+    }
 
     // ---------- Physics ----------
     // CPU-side mandelbrot, used only for a handful of collision samples per frame.
@@ -577,6 +876,38 @@
             if (insideSet(x + Math.cos(a) * r, y + Math.sin(a) * r)) return true;
         }
         return false;
+    }
+
+    // Exterior distance estimate: a conservative lower bound on the
+    // distance from (cr, ci) to the Mandelbrot set (0 if the point does
+    // not escape within the iteration budget). Lets movement ray-march
+    // through open space in a few large steps at any fall speed.
+    function distEst(cr, ci) {
+        const q = (cr - 0.25) * (cr - 0.25) + ci * ci;
+        if (q * (q + (cr - 0.25)) <= 0.25 * ci * ci) return 0;
+        if ((cr + 1) * (cr + 1) + ci * ci <= 0.0625) return 0;
+
+        const maxIter = CFG.iterations;
+        let zr = 0, zi = 0, dr = 0, di = 0;
+        for (let i = 0; i < maxIter; i++) {
+            // Derivative first (uses the current z): dz' = 2*z*dz + 1
+            const ndr = 2 * (zr * dr - zi * di) + 1;
+            const ndi = 2 * (zr * di + zi * dr);
+            const zr2 = zr * zr, zi2 = zi * zi;
+            if (zr2 + zi2 > 1e8) {
+                const m = Math.sqrt(zr2 + zi2);
+                const dm = Math.hypot(dr, di);
+                if (dm === 0) return 0;
+                // Classic |z|*ln|z|/|z'| with an extra 0.25 safety factor.
+                return 0.25 * m * Math.log(m) / dm;
+            }
+            const nzi = 2 * zr * zi + ci;
+            zr = zr2 - zi2 + cr;
+            zi = nzi;
+            dr = ndr;
+            di = ndi;
+        }
+        return 0;
     }
 
     // Unit vector pointing from the fractal core out to the player.
@@ -613,6 +944,192 @@
         cameraY = spawn.y;
     })();
 
+    // ---------- Baked collision SDF ----------
+    // A signed-distance grid to the *actual terrain* (the iteration level
+    // set), centered on the player and rebaked incrementally as they move.
+    // Gives exact circle collision and true surface normals — the analytic
+    // path below remains as the fallback for high speed / uncovered space.
+    const SDF_N = 192;
+    const SQRT2 = Math.SQRT2;
+    const SDF = {
+        valid: false,
+        ox: 0, oy: 0,        // world coords of texel (0,0) center (float64)
+        t: 0,                // texel size in world units
+        d: new Float32Array(SDF_N * SDF_N),      // signed distance, texel units
+        back: new Float32Array(SDF_N * SDF_N),
+        occ: new Uint8Array(SDF_N * SDF_N),
+        tmp: new Float32Array(SDF_N * SDF_N),
+        baking: false,
+        row: 0,
+        bx: 0, by: 0, bt: 0,
+        bakedIter: 0,
+        bakedRadius: 0
+    };
+
+    function sdfScheduleBake() {
+        const t = CFG.radius / 2;
+        SDF.baking = true;
+        SDF.row = 0;
+        SDF.bt = t;
+        // Lead the bake center along current velocity (clamped) so the grid
+        // lands where the player is heading.
+        const span = SDF_N * t;
+        let lx = player.vx * 30;
+        let ly = player.vy * 30;
+        const ll = Math.hypot(lx, ly);
+        const maxLead = span * 0.2;
+        if (ll > maxLead) { lx *= maxLead / ll; ly *= maxLead / ll; }
+        SDF.bx = player.x + lx - (SDF_N / 2 - 0.5) * t;
+        SDF.by = player.y + ly - (SDF_N / 2 - 0.5) * t;
+        SDF.bakedIter = CFG.iterations;
+        SDF.bakedRadius = CFG.radius;
+    }
+
+    function sdfBakeRows(rows) {
+        const t = SDF.bt;
+        for (let k = 0; k < rows && SDF.row < SDF_N; k++, SDF.row++) {
+            const y = SDF.by + SDF.row * t;
+            const base = SDF.row * SDF_N;
+            for (let i = 0; i < SDF_N; i++) {
+                SDF.occ[base + i] = insideSet(SDF.bx + i * t, y) ? 1 : 0;
+            }
+        }
+        if (SDF.row >= SDF_N) sdfFinishBake();
+    }
+
+    // Two-pass chamfer distance transform to cells where mask === val.
+    function chamferDT(mask, val, out) {
+        const N = SDF_N;
+        const INF = 1e6;
+        for (let i = 0; i < N * N; i++) out[i] = mask[i] === val ? 0 : INF;
+        for (let y = 0; y < N; y++) {
+            const r0 = y * N, rm = r0 - N;
+            for (let x = 0; x < N; x++) {
+                let v = out[r0 + x];
+                if (x > 0) v = Math.min(v, out[r0 + x - 1] + 1);
+                if (y > 0) {
+                    v = Math.min(v, out[rm + x] + 1);
+                    if (x > 0) v = Math.min(v, out[rm + x - 1] + SQRT2);
+                    if (x < N - 1) v = Math.min(v, out[rm + x + 1] + SQRT2);
+                }
+                out[r0 + x] = v;
+            }
+        }
+        for (let y = N - 1; y >= 0; y--) {
+            const r0 = y * N, rp = r0 + N;
+            for (let x = N - 1; x >= 0; x--) {
+                let v = out[r0 + x];
+                if (x < N - 1) v = Math.min(v, out[r0 + x + 1] + 1);
+                if (y < N - 1) {
+                    v = Math.min(v, out[rp + x] + 1);
+                    if (x < N - 1) v = Math.min(v, out[rp + x + 1] + SQRT2);
+                    if (x > 0) v = Math.min(v, out[rp + x - 1] + SQRT2);
+                }
+                out[r0 + x] = v;
+            }
+        }
+    }
+
+    function sdfFinishBake() {
+        // Outside cells: distance to terrain. Inside cells: -distance to air.
+        chamferDT(SDF.occ, 1, SDF.back);   // distance to occupied
+        chamferDT(SDF.occ, 0, SDF.tmp);    // distance to free
+        for (let i = 0; i < SDF_N * SDF_N; i++) {
+            // -0.5 texel: conservative, treats the surface half a texel fat.
+            SDF.back[i] = SDF.occ[i] ? -(SDF.tmp[i] - 0.5) : SDF.back[i] - 0.5;
+        }
+        const swap = SDF.d;
+        SDF.d = SDF.back;
+        SDF.back = swap;
+        SDF.ox = SDF.bx;
+        SDF.oy = SDF.by;
+        SDF.t = SDF.bt;
+        SDF.valid = true;
+        SDF.baking = false;
+    }
+
+    function sdfBilinear(fx, fy) {
+        const x0 = Math.floor(fx), y0 = Math.floor(fy);
+        const ax = fx - x0, ay = fy - y0;
+        const i = y0 * SDF_N + x0;
+        const d = SDF.d;
+        return (d[i] * (1 - ax) + d[i + 1] * ax) * (1 - ay) +
+               (d[i + SDF_N] * (1 - ax) + d[i + SDF_N + 1] * ax) * ay;
+    }
+
+    function sdfCovers(x, y) {
+        if (!SDF.valid) return false;
+        const fx = (x - SDF.ox) / SDF.t;
+        const fy = (y - SDF.oy) / SDF.t;
+        return fx > 3 && fy > 3 && fx < SDF_N - 4 && fy < SDF_N - 4;
+    }
+
+    // World-space signed distance + outward surface normal at (x, y).
+    function sdfQuery(x, y) {
+        const fx = (x - SDF.ox) / SDF.t;
+        const fy = (y - SDF.oy) / SDF.t;
+        const d = sdfBilinear(fx, fy) * SDF.t;
+        const e = 0.75;
+        let gx = sdfBilinear(fx + e, fy) - sdfBilinear(fx - e, fy);
+        let gy = sdfBilinear(fx, fy + e) - sdfBilinear(fx, fy - e);
+        const gl = Math.hypot(gx, gy);
+        if (gl < 1e-12) { gx = 0; gy = -1; } else { gx /= gl; gy /= gl; }
+        return { d, nx: gx, ny: gy };
+    }
+
+    // Sphere-trace the player against the SDF, sliding along contacts.
+    // Returns the unconsumed path length (0 when fully handled); leftover
+    // means we left the baked area and the analytic path should continue.
+    let lastNormal = { x: 0, y: -1 };
+    function sdfMove(remaining, dt) {
+        const r = CFG.radius;
+        const eps = SDF.t * 0.25;
+        for (let i = 0; i < 64 && remaining > 0; i++) {
+            if (!sdfCovers(player.x, player.y)) return remaining;
+            const q = sdfQuery(player.x, player.y);
+            let clear = q.d - r;
+            if (clear <= eps) {
+                // Contact: project out to one radius and kill the inward
+                // normal component. Damp only real impacts — resting
+                // micro-contact from gravity must not eat walking speed.
+                player.x += q.nx * (r + eps - q.d);
+                player.y += q.ny * (r + eps - q.d);
+                lastNormal = { x: q.nx, y: q.ny };
+                const vn = player.vx * q.nx + player.vy * q.ny;
+                if (vn < 0) {
+                    player.vx -= vn * q.nx;
+                    player.vy -= vn * q.ny;
+                    if (-vn > CFG.maxSpeed * 0.02) {
+                        impactThisFrame = Math.max(impactThisFrame, -vn);
+                        player.vx *= CFG.landDamp;
+                        player.vy *= CFG.landDamp;
+                    }
+                }
+                // Static friction: the SDF surface is smooth, so without
+                // this the player toboggans down every slope forever. In
+                // contact, slow, and hands-off => stick.
+                const walking = keys['arrowleft'] || keys['a'] ||
+                                keys['arrowright'] || keys['d'];
+                const spC = Math.hypot(player.vx, player.vy);
+                if (!walking && spC < CFG.maxSpeed * 0.1) {
+                    player.vx = 0;
+                    player.vy = 0;
+                    return 0;
+                }
+                clear = SDF.t * 0.5;
+            }
+            // Advance along the (possibly just-projected) velocity so
+            // tangential sliding and walking actually move.
+            const sp = Math.hypot(player.vx, player.vy);
+            if (sp < 1e-18) return 0;
+            const step = Math.min(remaining, Math.max(clear, SDF.t * 0.5));
+            player.x += player.vx / sp * step;
+            player.y += player.vy / sp * step;
+            remaining -= step;
+        }
+        return remaining;
+    }
+
     function update(dt) {
         const out = outwardDir();
         // Tangent: "right" on screen, planet-style — it rotates with you
@@ -629,56 +1146,107 @@
             player.vy += ty * CFG.move * dt;
         }
 
-        if (jetpackActive && player.fuel > 0) {
-            player.vx += out.x * CFG.thrust * dt;
-            player.vy += out.y * CFG.thrust * dt;
-            player.fuel = Math.max(0, player.fuel - CFG.fuelBurn * dt);
-        } else {
-            player.fuel = Math.min(player.fuel + CFG.fuelRegen * dt, player.maxFuel);
+        // Build up jump charge while held (dt is in 60fps frames).
+        if (jump.charging) {
+            jump.charge = Math.min(1, jump.charge + dt / (CFG.chargeTime * 60));
         }
 
         // Gravity toward the core.
         player.vx -= out.x * CFG.gravity * dt;
         player.vy -= out.y * CFG.gravity * dt;
 
-        const drag = Math.pow(CFG.friction, dt);
-        player.vx *= drag;
-        player.vy *= drag;
+        // Gravity wells: donut force — repels at the very center (u < 0.22),
+        // attracts in a ring peaking around u ≈ 0.6, fades to zero at the
+        // influence edge. wellPull (0..1) tracks how deep inside one we are.
+        let wellPull = 0;
+        forEachWellNear(player.x, player.y, (wx, wy) => {
+            const dx = wx - player.x;
+            const dy = wy - player.y;
+            const d = Math.hypot(dx, dy);
+            const u = d / CFG.wellRadius;
+            if (u >= 1 || d < 1e-15) return;
+            const f = CFG.wellStrength * (u - 0.22) * (1 - u) * 5.2;
+            player.vx += dx / d * f * dt;
+            player.vy += dy / d * f * dt;
+            wellPull = Math.max(wellPull, 1 - u);
+        });
 
-        // Clamp speed.
-        const speed = Math.hypot(player.vx, player.vy);
-        if (speed > CFG.maxSpeed) {
-            const s = CFG.maxSpeed / speed;
+        // Drag and speed clamp on the full velocity (terminal velocity).
+        // Inside a well the drag fades away so momentum carries — that's
+        // what makes them surfable instead of a spiral trap.
+        const fricEff = 1 - (1 - CFG.friction) * (1 - 0.85 * wellPull);
+        const dragF = Math.pow(fricEff, dt);
+        player.vx *= dragF;
+        player.vy *= dragF;
+        const spd = Math.hypot(player.vx, player.vy);
+        if (spd > CFG.maxSpeed) {
+            const s = CFG.maxSpeed / spd;
             player.vx *= s;
             player.vy *= s;
         }
 
-        // If terrain appeared inside us (iteration/size slider change),
-        // push outward until free before moving at all.
+        // If terrain is inside us (slider change, teleport into a filament),
+        // push outward with a growing step so we escape in a single frame
+        // no matter how thick the terrain is at this scale.
         if (collides(player.x, player.y)) {
-            for (let i = 0; i < 200 && collides(player.x, player.y); i++) {
-                player.x += out.x * CFG.radius * 2;
-                player.y += out.y * CFG.radius * 2;
+            let step = CFG.radius * 2;
+            for (let i = 0; i < 400 && collides(player.x, player.y); i++) {
+                player.x += out.x * step;
+                player.y += out.y * step;
+                step = Math.min(step * 1.15, 1e-4);
             }
             player.vx = 0;
             player.vy = 0;
             return;
         }
 
-        // Substepped movement: the player is tiny compared to per-frame
-        // travel, so a single-step move would tunnel straight through thin
-        // filaments. Advance in steps of at most 2 radii; on contact, try
-        // to climb small bumps, then to slide along the surface, and only
-        // then stop.
+        // Movement. Preferred path: sphere-trace against the baked SDF —
+        // exact circle collision, true normals, natural sliding. Falls back
+        // to the analytic DE ray-march when moving too fast for the baked
+        // neighborhood or outside its coverage.
         const r = CFG.radius;
-        const moveX = player.vx * dt;
-        const moveY = player.vy * dt;
-        const dist = Math.hypot(moveX, moveY);
-        const steps = Math.min(Math.max(1, Math.ceil(dist / (r * 2))), 400);
-        const sx = moveX / steps;
-        const sy = moveY / steps;
+        const speed = Math.hypot(player.vx, player.vy);
+        if (speed === 0) return;
+        let remaining = speed * dt;
 
-        for (let i = 0; i < steps; i++) {
+        if (remaining < r * 60 && sdfCovers(player.x, player.y)) {
+            remaining = sdfMove(remaining, dt);
+            if (remaining <= 0) return;
+        }
+
+        const speedNow = Math.hypot(player.vx, player.vy);
+        if (speedNow === 0) return;
+        const dirX = player.vx / speedNow;
+        const dirY = player.vy / speedNow;
+        let budget = 1000;
+        let forceGranular = false;
+
+        while (remaining > 0 && budget-- > 0) {
+            if (!forceGranular) {
+                const d = distEst(player.x, player.y);
+                if (d > r * 8) {
+                    const step = Math.min(remaining, d * 0.5);
+                    const jx = player.x + dirX * step;
+                    const jy = player.y + dirY * step;
+                    // The DE measures the true set; our terrain (the
+                    // iteration-count level set) is slightly fatter. If a
+                    // jump lands inside it, back off and go granular.
+                    if (!collides(jx, jy)) {
+                        player.x = jx;
+                        player.y = jy;
+                        remaining -= step;
+                        continue;
+                    }
+                    forceGranular = true;
+                }
+            }
+
+            // Near terrain: granular substep with assists.
+            const step = Math.min(remaining, r * 2);
+            const sx = dirX * step;
+            const sy = dirY * step;
+            remaining -= step;
+
             const nx = player.x + sx;
             const ny = player.y + sy;
             if (!collides(nx, ny)) {
@@ -738,6 +1306,7 @@
                 // Blocked radially: land — kill inward velocity.
                 const vr = player.vx * out.x + player.vy * out.y;
                 if (vr < 0) {
+                    impactThisFrame = Math.max(impactThisFrame, -vr);
                     player.vx -= vr * out.x;
                     player.vy -= vr * out.y;
                 }
@@ -756,8 +1325,10 @@
             }
 
             // Fully blocked: land here.
+            lastNormal = { x: out.x, y: out.y };
             const vr = player.vx * out.x + player.vy * out.y;
             if (vr < 0) {
+                impactThisFrame = Math.max(impactThisFrame, -vr);
                 player.vx -= vr * out.x;
                 player.vy -= vr * out.y;
             }
@@ -767,53 +1338,664 @@
         }
     }
 
-    // ---------- Rendering ----------
-    function renderFractal() {
+    // ---------- Effects ----------
+    // Squash & stretch spring: s is the along-axis scale (1 = round).
+    const anim = { s: 1, v: 0 };
+
+    // Camera shake (screen px, decays fast). Applied to a render-only
+    // camera so the physics camera stays clean.
+    let shakeAmp = 0;
+    let camRX = cameraX;
+    let camRY = cameraY;
+
+    const particles = [];
+    function spawnDust(x, y, out, impact01) {
+        const n = 5 + Math.round(impact01 * 9);
+        const base = Math.atan2(out.y, out.x);
+        for (let i = 0; i < n; i++) {
+            const a = base + (Math.random() - 0.5) * 2.4;
+            const sp = CFG.maxSpeed * (0.08 + 0.45 * impact01) * (0.4 + Math.random() * 0.6);
+            particles.push({
+                x, y,
+                vx: Math.cos(a) * sp,
+                vy: Math.sin(a) * sp,
+                life: 0,
+                maxLife: 18 + Math.random() * 22,
+                size: 1.5 + Math.random() * 2,
+                color: '205, 225, 255'
+            });
+        }
+        if (particles.length > 300) particles.splice(0, particles.length - 300);
+    }
+    function spawnSparkle(x, y) {
+        for (let i = 0; i < 12; i++) {
+            const a = Math.random() * Math.PI * 2;
+            const sp = CFG.maxSpeed * (0.12 + Math.random() * 0.35);
+            particles.push({
+                x, y,
+                vx: Math.cos(a) * sp,
+                vy: Math.sin(a) * sp,
+                life: 0,
+                maxLife: 22 + Math.random() * 18,
+                size: 1.5 + Math.random() * 1.5,
+                color: '255, 215, 90'
+            });
+        }
+    }
+
+    // Motion trail: recent player positions, newest last.
+    const trail = [];
+
+    // ---------- Orbs (deterministic, hash-seeded collectibles) ----------
+    const ORB_CELL = 5e-7;      // one candidate orb per grid cell
+    const ORB_R = 1.5e-8;       // visual radius in world units
+    const ORB_PICKUP = 3e-8;    // pickup distance
+    const orbCache = new Map();
+    const orbCollected = new Set();
+    let orbCount = 0;
+
+    function hashCell(ix, iy, salt) {
+        let h = Math.imul(ix, 374761393) ^ Math.imul(iy, 668265263) ^ Math.imul(salt, 2246822519);
+        h = Math.imul(h ^ (h >>> 13), 1274126177);
+        h ^= h >>> 16;
+        return (h >>> 0) / 4294967296;
+    }
+
+    // An orb exists in a cell if the hash says so AND the candidate point
+    // hovers near terrain (via the distance estimate) — so orbs cluster
+    // along the fractal surface, in crevices and around filaments.
+    function orbForCell(ix, iy) {
+        const key = ix + ',' + iy;
+        let orb = orbCache.get(key);
+        if (orb !== undefined) return orb;
+        orb = null;
+        if (hashCell(ix, iy, 1) < 0.55) {
+            const x = (ix + 0.1 + 0.8 * hashCell(ix, iy, 2)) * ORB_CELL;
+            const y = (iy + 0.1 + 0.8 * hashCell(ix, iy, 3)) * ORB_CELL;
+            const d = distEst(x, y);
+            if (d > ORB_R && d < 6e-7) orb = { x, y, key };
+        }
+        if (orbCache.size > 20000) orbCache.clear();
+        orbCache.set(key, orb);
+        return orb;
+    }
+
+    function collectNearbyOrbs() {
+        const cx = Math.floor(player.x / ORB_CELL);
+        const cy = Math.floor(player.y / ORB_CELL);
+        for (let ix = cx - 1; ix <= cx + 1; ix++) {
+            for (let iy = cy - 1; iy <= cy + 1; iy++) {
+                const orb = orbForCell(ix, iy);
+                if (!orb || orbCollected.has(orb.key)) continue;
+                if (Math.hypot(player.x - orb.x, player.y - orb.y) < ORB_PICKUP + CFG.radius) {
+                    orbCollected.add(orb.key);
+                    orbCount++;
+                    sndOrb();
+                    spawnSparkle(orb.x, orb.y);
+                }
+            }
+        }
+    }
+
+    // ---------- Gravity wells (hash-seeded, donut-shaped force fields) ----------
+    // The pull peaks in a ring around the center and the innermost core
+    // gently repels, so the middle is never a trap — you surf the rim.
+    const WELL_CELL = 4e-6;
+    const wellCache = new Map();
+
+    function wellForCell(ix, iy) {
+        const key = ix + ',' + iy;
+        let rec = wellCache.get(key);
+        if (rec === undefined) {
+            const x = (ix + 0.15 + 0.7 * hashCell(ix, iy, 12)) * WELL_CELL;
+            const y = (iy + 0.15 + 0.7 * hashCell(ix, iy, 13)) * WELL_CELL;
+            rec = { x, y, h: hashCell(ix, iy, 11), de: distEst(x, y) };
+            if (wellCache.size > 20000) wellCache.clear();
+            wellCache.set(key, rec);
+        }
+        // Existence depends on live sliders: density gate + open-sky check.
+        // The clearance is deliberately loose — a well whose rim brushes
+        // terrain makes for the best surfing lines.
+        if (rec.h < CFG.wellDensity && rec.de > CFG.wellRadius * 0.08) return rec;
+        return null;
+    }
+
+    function forEachWellNear(x, y, cb) {
+        const cx = Math.floor(x / WELL_CELL);
+        const cy = Math.floor(y / WELL_CELL);
+        // Scan wide enough that any well whose field reaches us is found.
+        const range = Math.min(8, Math.ceil(CFG.wellRadius / WELL_CELL) + 1);
+        for (let ix = cx - range; ix <= cx + range; ix++) {
+            for (let iy = cy - range; iy <= cy + range; iy++) {
+                const wr = wellForCell(ix, iy);
+                if (wr) cb(wr.x, wr.y);
+            }
+        }
+    }
+
+    function drawWells(now) {
         const viewW = zoom;
         const viewH = zoom * h / w;
-        const refLen = updateRefOrbit();
+        const halfSpan = 0.55 * Math.hypot(viewW, viewH);
+        if (halfSpan * 2 / WELL_CELL > 30) return;
+        const x0 = Math.floor((camRX - halfSpan - CFG.wellRadius) / WELL_CELL);
+        const x1 = Math.floor((camRX + halfSpan + CFG.wellRadius) / WELL_CELL);
+        const y0 = Math.floor((camRY - halfSpan - CFG.wellRadius) / WELL_CELL);
+        const y1 = Math.floor((camRY + halfSpan + CFG.wellRadius) / WELL_CELL);
+        for (let ix = x0; ix <= x1; ix++) {
+            for (let iy = y0; iy <= y1; iy++) {
+                const well = wellForCell(ix, iy);
+                if (!well) continue;
+                const p = worldToScreen(well.x, well.y);
+                const Rpx = CFG.wellRadius / viewW * w;
+                if (p.sx < -Rpx || p.sx > w + Rpx || p.sy < -Rpx || p.sy > h + Rpx) continue;
+
+                if (Rpx < 6) {
+                    octx.fillStyle = 'rgba(170, 130, 255, 0.6)';
+                    octx.beginPath();
+                    octx.arc(p.sx, p.sy, 2.5, 0, Math.PI * 2);
+                    octx.fill();
+                    continue;
+                }
+                // Zoomed deep inside a well: the ring is far bigger than
+                // the screen, skip the decorations.
+                if (Rpx > 8000) continue;
+
+                // Influence boundary.
+                octx.strokeStyle = 'rgba(170, 130, 255, 0.22)';
+                octx.lineWidth = 1.5;
+                octx.setLineDash([5, 8]);
+                octx.beginPath();
+                octx.arc(p.sx, p.sy, Rpx, 0, Math.PI * 2);
+                octx.stroke();
+                octx.setLineDash([]);
+
+                // Swirling vortex arms (inner arcs spin faster).
+                const radii = [0.3, 0.5, 0.72];
+                for (let k = 0; k < 3; k++) {
+                    const rr = Rpx * radii[k];
+                    const a0 = -now * 0.0016 / radii[k] + k * 2.1;
+                    octx.strokeStyle = `rgba(180, 140, 255, ${0.42 - k * 0.09})`;
+                    octx.lineWidth = 2;
+                    octx.beginPath();
+                    octx.arc(p.sx, p.sy, rr, a0, a0 + 2.2);
+                    octx.stroke();
+                }
+
+                // Core glow.
+                const cg = octx.createRadialGradient(p.sx, p.sy, 0, p.sx, p.sy, Rpx * 0.2);
+                cg.addColorStop(0, 'rgba(210, 180, 255, 0.75)');
+                cg.addColorStop(1, 'rgba(140, 90, 255, 0)');
+                octx.fillStyle = cg;
+                octx.beginPath();
+                octx.arc(p.sx, p.sy, Rpx * 0.2, 0, Math.PI * 2);
+                octx.fill();
+
+                // Ambient in-spiraling motes.
+                if (particles.length < 260 && Math.random() < 0.45) {
+                    const th = Math.random() * Math.PI * 2;
+                    const wr = CFG.wellRadius * (0.75 + 0.2 * Math.random());
+                    const sp = CFG.maxSpeed * 0.22;
+                    particles.push({
+                        x: well.x + Math.cos(th) * wr,
+                        y: well.y + Math.sin(th) * wr,
+                        vx: Math.sin(th) * sp - Math.cos(th) * sp * 0.4,
+                        vy: -Math.cos(th) * sp - Math.sin(th) * sp * 0.4,
+                        life: 0,
+                        maxLife: 26 + Math.random() * 14,
+                        size: 1.2 + Math.random() * 1.4,
+                        color: '185, 150, 255'
+                    });
+                }
+            }
+        }
+    }
+
+    function drawOrbs(now) {
+        const viewW = zoom;
+        const viewH = zoom * h / w;
+        const halfSpan = 0.55 * Math.hypot(viewW, viewH);
+        // Too zoomed out to see orbs: skip (they are microscopic).
+        if (halfSpan * 2 / ORB_CELL > 42) return;
+        const x0 = Math.floor((camRX - halfSpan) / ORB_CELL);
+        const x1 = Math.floor((camRX + halfSpan) / ORB_CELL);
+        const y0 = Math.floor((camRY - halfSpan) / ORB_CELL);
+        const y1 = Math.floor((camRY + halfSpan) / ORB_CELL);
+        for (let ix = x0; ix <= x1; ix++) {
+            for (let iy = y0; iy <= y1; iy++) {
+                const orb = orbForCell(ix, iy);
+                if (!orb || orbCollected.has(orb.key)) continue;
+                const p = worldToScreen(orb.x, orb.y);
+                if (p.sx < -40 || p.sx > w + 40 || p.sy < -40 || p.sy > h + 40) continue;
+                const phase = hashCell(ix, iy, 4) * Math.PI * 2;
+                const pulse = 1 + 0.14 * Math.sin(now * 0.004 + phase);
+                const pr = Math.min(Math.max(ORB_R / viewW * w, 4), 26) * pulse;
+                octx.fillStyle = 'rgba(255, 215, 90, 0.16)';
+                octx.beginPath();
+                octx.arc(p.sx, p.sy, pr * 2.1, 0, Math.PI * 2);
+                octx.fill();
+                octx.fillStyle = 'rgba(255, 215, 90, 0.9)';
+                octx.beginPath();
+                octx.arc(p.sx, p.sy, pr, 0, Math.PI * 2);
+                octx.fill();
+                octx.fillStyle = 'rgba(255, 250, 220, 0.9)';
+                octx.beginPath();
+                octx.arc(p.sx - pr * 0.3, p.sy - pr * 0.3, pr * 0.32, 0, Math.PI * 2);
+                octx.fill();
+            }
+        }
+    }
+
+    // ---------- Rendering ----------
+    function renderDirect() {
+        const viewW = zoom;
+        const viewH = zoom * h / w;
+        gl.useProgram(prog);
+        const refLen = updateRefOrbit(camRX, camRY);
         gl.uniform2f(uView, viewW, viewH);
-        gl.uniform2f(uRes, w, h);
+        gl.uniform2f(uRes, glCanvas.width, glCanvas.height);
         gl.uniform2f(uRotCS, Math.cos(camAngle), Math.sin(camAngle));
         gl.uniform2f(uHue, CFG.hueOffset, CFG.hueSpan);
         gl.uniform1i(uMaxIter, CFG.iterations);
         gl.uniform1i(uRefLen, refLen);
+        gl.uniform1f(uPix, viewW / glCanvas.width);
         gl.drawArrays(gl.TRIANGLES, 0, 3);
+    }
+
+    // ---------- Tile pyramid ----------
+    // The plane is cut into axis-aligned tiles per zoom level (level L tile
+    // spans TILE_BASE / 2^L). Tiles bake once into RG16F textures via the
+    // perturbation shader and get composited (rotated, colored, DE-faded)
+    // each frame. Hue/AA sliders never invalidate; iterations flush all.
+    const TILE_RES = 256;
+    const TILE_BASE = 4;
+    const TILE_MAX = 680;           // LRU capacity (~170 MB of RG16F)
+    const tiles = new Map();        // "L:ix:iy" -> {tex, fbo, last}
+    let tileStamp = 0;
+    let tilesIter = 0;
+
+    function flushTiles() {
+        for (const t of tiles.values()) {
+            gl.deleteFramebuffer(t.fbo);
+            gl.deleteTexture(t.tex);
+        }
+        tiles.clear();
+    }
+
+    function bakeTile(L, ix, iy) {
+        const S = TILE_BASE / Math.pow(2, L);
+        const tex = gl.createTexture();
+        gl.activeTexture(gl.TEXTURE0);
+        gl.bindTexture(gl.TEXTURE_2D, tex);
+        gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RG16F, TILE_RES, TILE_RES);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+
+        const fbo = gl.createFramebuffer();
+        gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0,
+                                gl.TEXTURE_2D, tex, 0);
+        gl.viewport(0, 0, TILE_RES, TILE_RES);
+        gl.useProgram(progBake);
+        // Reference orbit at the tile center (float64 CPU-side).
+        const refLen = updateRefOrbit((ix + 0.5) * S, (iy + 0.5) * S);
+        gl.uniform1f(B.span, S);
+        gl.uniform1i(B.maxIter, CFG.iterations);
+        gl.uniform1i(B.refLen, refLen);
+        gl.uniform1i(B.refOrbit, 0);
+        gl.drawArrays(gl.TRIANGLES, 0, 3);
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+
+        const rec = { tex, fbo, last: tileStamp };
+        tiles.set(L + ':' + ix + ':' + iy, rec);
+
+        // LRU eviction: drop the stalest tile not used this frame.
+        if (tiles.size > TILE_MAX) {
+            let worstKey = null, worst = Infinity;
+            for (const [k, t] of tiles) {
+                if (t.last < worst) { worst = t.last; worstKey = k; }
+            }
+            if (worstKey && worst < tileStamp) {
+                const t = tiles.get(worstKey);
+                gl.deleteFramebuffer(t.fbo);
+                gl.deleteTexture(t.tex);
+                tiles.delete(worstKey);
+            }
+        }
+        return rec;
+    }
+
+    // Find a texture for the slot: the exact tile, else the nearest baked
+    // ancestor with a uv window into it.
+    function tileOrAncestor(L, ix, iy) {
+        let uvs = 1, u0 = 0, v0 = 0;
+        for (let l = L; l >= 0 && L - l <= 8; l--) {
+            const t = tiles.get(l + ':' + ix + ':' + iy);
+            if (t) {
+                t.last = tileStamp;
+                const texelW = TILE_BASE / Math.pow(2, l) / TILE_RES;
+                return { tex: t.tex, u0, v0, uvs, texelW };
+            }
+            u0 = (ix & 1) * 0.5 + u0 * 0.5;
+            v0 = (iy & 1) * 0.5 + v0 * 0.5;
+            uvs *= 0.5;
+            ix >>= 1;
+            iy >>= 1;
+        }
+        return null;
+    }
+
+    function renderTiled() {
+        tileStamp++;
+        if (tilesIter !== CFG.iterations) {
+            flushTiles();
+            tilesIter = CFG.iterations;
+        }
+
+        const viewW = zoom;
+        const viewH = zoom * h / w;
+        const pixW = viewW / glCanvas.width;
+        // ceil: tile texels are always at least screen resolution, so the
+        // one-pixel bright rim at the boundary survives compositing.
+        let L = Math.ceil(Math.log2(TILE_BASE / (pixW * TILE_RES)));
+        L = Math.max(0, Math.min(L, 42));
+        const S = TILE_BASE / Math.pow(2, L);
+
+        const toNDC = (x, y) => {
+            const p = worldToScreen(x, y);
+            return [p.sx / w * 2 - 1, 1 - p.sy / h * 2];
+        };
+
+        // Per-tile screen culling with two rings: tight for drawing, wide
+        // for prefetch baking, so tiles are usually ready before they scroll
+        // or zoom into view.
+        const corners = (ix, iy) => [
+            toNDC(ix * S, iy * S),
+            toNDC((ix + 1) * S, iy * S),
+            toNDC(ix * S, (iy + 1) * S),
+            toNDC((ix + 1) * S, (iy + 1) * S)
+        ];
+        const inBox = (cs, M) => {
+            let l = true, r = true, t = true, b = true;
+            for (const c of cs) {
+                if (c[0] > -M) l = false;
+                if (c[0] < M) r = false;
+                if (c[1] > -M) t = false;
+                if (c[1] < M) b = false;
+            }
+            return !(l || r || t || b);
+        };
+
+        const halfSpan = 0.5 * Math.hypot(viewW, viewH) * 1.6 + S * 0.5;
+        const x0 = Math.floor((camRX - halfSpan) / S);
+        const x1 = Math.floor((camRX + halfSpan) / S);
+        const y0 = Math.floor((camRY - halfSpan) / S);
+        const y1 = Math.floor((camRY + halfSpan) / S);
+        if ((x1 - x0 + 1) * (y1 - y0 + 1) > 2200) return false;
+
+        // Collect draw slots and the bake queue: visible-missing first,
+        // then the prefetch ring around the viewport.
+        const visible = [];
+        const missing = [];
+        for (let ix = x0; ix <= x1; ix++) {
+            for (let iy = y0; iy <= y1; iy++) {
+                const cs = corners(ix, iy);
+                const vis = inBox(cs, 1.05);
+                if (vis) visible.push([ix, iy, cs]);
+                else if (!inBox(cs, 1.9)) continue;
+                const rec = tiles.get(L + ':' + ix + ':' + iy);
+                if (rec) {
+                    rec.last = tileStamp;   // keep the prefetch ring warm
+                } else {
+                    const dx = (ix + 0.5) * S - camRX;
+                    const dy = (iy + 0.5) * S - camRY;
+                    missing.push([(vis ? 0 : 1e9) + dx * dx + dy * dy, L, ix, iy]);
+                }
+            }
+        }
+        if (visible.length > 420) return false;
+
+        // Zooming in: also prefetch next-level children under the view
+        // center, so the level switch lands on already-sharp tiles.
+        if (zoomTarget < zoom * 0.999 && L < 42) {
+            const S2 = S / 2;
+            const ccx = Math.floor(camRX / S2);
+            const ccy = Math.floor(camRY / S2);
+            for (let ix = ccx - 3; ix <= ccx + 3; ix++) {
+                for (let iy = ccy - 3; iy <= ccy + 3; iy++) {
+                    if (!tiles.has((L + 1) + ':' + ix + ':' + iy)) {
+                        const dx = (ix + 0.5) * S2 - camRX;
+                        const dy = (iy + 0.5) * S2 - camRY;
+                        missing.push([2e9 + dx * dx + dy * dy, L + 1, ix, iy]);
+                    }
+                }
+            }
+        }
+
+        missing.sort((a, b) => a[0] - b[0]);
+        const zooming = Math.abs(zoomTarget - zoom) > zoom * 0.004;
+        const budget = zooming ? 6 : 4;
+        for (let k = 0; k < Math.min(budget, missing.length); k++) {
+            bakeTile(missing[k][1], missing[k][2], missing[k][3]);
+        }
+        gl.viewport(0, 0, glCanvas.width, glCanvas.height);
+
+        // Composite.
+        gl.clearColor(0.02, 0.03, 0.1, 1);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+        gl.useProgram(progComp);
+        gl.uniform2f(C.hue, CFG.hueOffset, CFG.hueSpan);
+        gl.uniform1f(C.pixW, pixW);
+        gl.uniform1i(C.tex, 0);
+        gl.activeTexture(gl.TEXTURE0);
+
+        for (const [ix, iy, cs] of visible) {
+            const src = tileOrAncestor(L, ix, iy);
+            if (!src) continue;
+            const o = cs[0], px = cs[1], py = cs[2];
+            gl.uniform2f(C.origin, o[0], o[1]);
+            gl.uniform2f(C.ax, px[0] - o[0], px[1] - o[1]);
+            gl.uniform2f(C.ay, py[0] - o[0], py[1] - o[1]);
+            gl.uniform2f(C.uv0, src.u0, src.v0);
+            gl.uniform1f(C.uvs, src.uvs);
+            gl.uniform1f(C.texelW, src.texelW);
+            gl.bindTexture(gl.TEXTURE_2D, src.tex);
+            gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+        }
+        return true;
+    }
+
+    function renderFractal() {
+        if (!progComp || !renderTiled()) renderDirect();
+    }
+
+    // Warm the root so every slot always has an ancestor to fall back on.
+    if (progComp) {
+        for (const [rx, ry] of [[-1, -1], [0, -1], [-1, 0], [0, 0]]) {
+            bakeTile(0, rx, ry);
+        }
+        tilesIter = CFG.iterations;
+        gl.viewport(0, 0, glCanvas.width, glCanvas.height);
+    }
+
+    // World coords -> screen CSS px (applies the inverse camera rotation).
+    function worldToScreen(x, y) {
+        const viewW = zoom;
+        const viewH = zoom * h / w;
+        const dxw = x - camRX;
+        const dyw = y - camRY;
+        const cosA = Math.cos(camAngle);
+        const sinA = Math.sin(camAngle);
+        return {
+            sx: (dxw * cosA + dyw * sinA) / viewW * w + w / 2,
+            sy: (-dxw * sinA + dyw * cosA) / viewH * h + h / 2
+        };
+    }
+
+    // Unit aim direction in screen space: player -> pointer (space = up).
+    function aimScreenDir() {
+        if (jump.viaKey) return { x: 0, y: -1 };
+        const ps = worldToScreen(player.x, player.y);
+        const dx = jump.aimX - ps.sx;
+        const dy = jump.aimY - ps.sy;
+        const len = Math.hypot(dx, dy);
+        if (len < 1) return { x: 0, y: -1 };
+        return { x: dx / len, y: dy / len };
+    }
+
+    function aimWorldDir() {
+        const d = aimScreenDir();
+        const cosA = Math.cos(camAngle);
+        const sinA = Math.sin(camAngle);
+        // Screen -> world is the forward camera rotation.
+        return { x: d.x * cosA - d.y * sinA, y: d.x * sinA + d.y * cosA };
+    }
+
+    function jumpSpeed() {
+        return CFG.jumpMin + (CFG.jumpMax - CFG.jumpMin) * jump.charge;
+    }
+
+    function executeJump() {
+        const dir = aimWorldDir();
+        let v = jumpSpeed();
+        // Escape valve: jumps from deep inside a gravity well steal its
+        // energy — 1.6x power, so you can always break free.
+        forEachWellNear(player.x, player.y, (wx, wy) => {
+            const u = Math.hypot(wx - player.x, wy - player.y) / CFG.wellRadius;
+            if (u < 0.6) v = jumpSpeed() * 1.6;
+        });
+        player.vx = dir.x * v;
+        player.vy = dir.y * v;
+        jumpFlash = { t: performance.now(), x: player.x, y: player.y };
+        sndChargeStop();
+        sndJump(jump.charge);
+        // Launch: snap from the coiled crouch into a hard stretch.
+        anim.s = 1.45;
+        anim.v = 0;
+        jump.charging = false;
+        jump.charge = 0;
+    }
+
+    // Charge 0..1 -> green through orange to red.
+    function chargeColor(alpha) {
+        return `hsla(${140 * (1 - jump.charge)}, 100%, 60%, ${alpha})`;
     }
 
     function renderOverlay() {
         octx.clearRect(0, 0, w, h);
+        const now = performance.now();
 
-        const viewW = zoom;
-        const viewH = zoom * h / w;
-        // Inverse of the camera rotation: world delta -> screen delta.
-        const dxw = player.x - cameraX;
-        const dyw = player.y - cameraY;
-        const cosA = Math.cos(camAngle);
-        const sinA = Math.sin(camAngle);
-        const dxs = dxw * cosA + dyw * sinA;
-        const dys = -dxw * sinA + dyw * cosA;
-        const sx = dxs / viewW * w + w / 2;
-        const sy = dys / viewH * h + h / 2;
+        const { sx, sy } = worldToScreen(player.x, player.y);
         // True size at this zoom, but never smaller than 3px so the
         // player stays findable when zoomed way out.
-        const sr = Math.max(CFG.radius / viewW * w, 3);
+        const sr = Math.max(CFG.radius / zoom * w, 3);
 
-        if (jetpackActive && player.fuel > 0) {
-            // Thrust is screen-up by construction, so the flame is screen-down.
-            octx.fillStyle = 'rgba(255, 150, 0, 0.7)';
-            octx.fillRect(sx - sr * 0.35, sy + sr, sr * 0.7, sr * 1.6);
-            octx.fillStyle = 'rgba(255, 255, 80, 0.5)';
-            octx.fillRect(sx - sr * 0.2, sy + sr, sr * 0.4, sr);
+        // --- Gravity wells ---
+        drawWells(now);
+
+        // --- Orbs ---
+        drawOrbs(now);
+
+        // --- Motion trail ---
+        for (let i = 0; i < trail.length; i++) {
+            const p = worldToScreen(trail[i].x, trail[i].y);
+            const f = i / trail.length;
+            octx.fillStyle = `rgba(0, 255, 136, ${0.28 * f})`;
+            octx.beginPath();
+            octx.arc(p.sx, p.sy, Math.max(1, sr * 0.75 * f), 0, Math.PI * 2);
+            octx.fill();
         }
 
+        // --- Particles ---
+        for (const p of particles) {
+            const s = worldToScreen(p.x, p.y);
+            const a = 1 - p.life / p.maxLife;
+            octx.fillStyle = `rgba(${p.color}, ${0.85 * a})`;
+            octx.beginPath();
+            octx.arc(s.sx, s.sy, p.size, 0, Math.PI * 2);
+            octx.fill();
+        }
+
+        // --- Jump aim: a single arrow that fades in as a gradient. ---
+        if (jump.charging) {
+            const dirS = aimScreenDir();
+            // Smooth appearance: ease in over the first part of the charge.
+            const fade = Math.min(1, jump.charge * 6);
+            const alen = 38 + 72 * jump.charge;
+            const x0 = sx + dirS.x * (sr + 4);
+            const y0 = sy + dirS.y * (sr + 4);
+            const x1 = sx + dirS.x * alen;
+            const y1 = sy + dirS.y * alen;
+
+            const grad = octx.createLinearGradient(x0, y0, x1, y1);
+            grad.addColorStop(0, chargeColor(0));
+            grad.addColorStop(1, chargeColor(0.9 * fade));
+            octx.strokeStyle = grad;
+            octx.lineWidth = 3.5;
+            octx.lineCap = 'round';
+            octx.beginPath();
+            octx.moveTo(x0, y0);
+            octx.lineTo(x1, y1);
+            octx.stroke();
+
+            // Arrowhead.
+            const ang = Math.atan2(dirS.y, dirS.x);
+            octx.fillStyle = chargeColor(0.9 * fade);
+            octx.beginPath();
+            octx.moveTo(x1 + Math.cos(ang) * 11, y1 + Math.sin(ang) * 11);
+            octx.lineTo(x1 + Math.cos(ang + 2.5) * 9, y1 + Math.sin(ang + 2.5) * 9);
+            octx.lineTo(x1 + Math.cos(ang - 2.5) * 9, y1 + Math.sin(ang - 2.5) * 9);
+            octx.closePath();
+            octx.fill();
+        }
+
+        // --- Release burst ---
+        if (jumpFlash) {
+            const age = (performance.now() - jumpFlash.t) / 400;
+            if (age >= 1) {
+                jumpFlash = null;
+            } else {
+                const p = worldToScreen(jumpFlash.x, jumpFlash.y);
+                octx.strokeStyle = `rgba(125, 211, 252, ${0.8 * (1 - age)})`;
+                octx.lineWidth = 3 * (1 - age);
+                octx.beginPath();
+                octx.arc(p.sx, p.sy, 6 + age * 34, 0, Math.PI * 2);
+                octx.stroke();
+            }
+        }
+
+        // --- Player: a proper blob — hard stretch along the motion axis,
+        // deep squash on impact, a coiled crouch while charging. ---
+        const spd = Math.hypot(player.vx, player.vy);
+        const stretch = 1 + Math.min(1.1, Math.pow(spd / CFG.maxSpeed, 0.8) * 1.1);
+        // Stretch axis: velocity when moving; the aim while charging from
+        // a standstill (a spring coiling toward the jump); else vertical.
+        let axis = Math.PI / 2;
+        if (spd > CFG.maxSpeed * 0.04) {
+            const cosA = Math.cos(camAngle);
+            const sinA = Math.sin(camAngle);
+            const vsx = player.vx * cosA + player.vy * sinA;
+            const vsy = -player.vx * sinA + player.vy * cosA;
+            axis = Math.atan2(vsy, vsx);
+        } else if (jump.charging) {
+            const dirS = aimScreenDir();
+            axis = Math.atan2(dirS.y, dirS.x);
+        }
+        const along = Math.min(2.3, Math.max(0.35, stretch * anim.s));
+        octx.save();
+        octx.translate(sx, sy);
+        octx.rotate(axis);
+        octx.scale(along, 1 / along);
         octx.fillStyle = '#00ff88';
         octx.beginPath();
-        octx.arc(sx, sy, sr, 0, Math.PI * 2);
+        octx.arc(0, 0, sr, 0, Math.PI * 2);
         octx.fill();
         octx.strokeStyle = 'rgba(0, 0, 0, 0.5)';
         octx.lineWidth = 1;
         octx.stroke();
+        octx.restore();
     }
 
     // ---------- HUD (throttled: DOM writes are not free) ----------
@@ -838,7 +2020,9 @@
         document.getElementById('vel').textContent =
             speed >= 1e-4 ? (speed * 1e3).toFixed(1) + ' m/s'
                           : (speed * 1e9).toFixed(1) + ' nm/s';
-        document.getElementById('fuel').textContent = Math.round(player.fuel) + '%';
+        document.getElementById('charge').textContent =
+            jump.charging ? Math.round(jump.charge * 100) + '%' : 'ready';
+        document.getElementById('orbs').textContent = orbCount;
         const mag = 3 / zoom;
         document.getElementById('zoomval').textContent =
             (mag >= 1e4 ? mag.toExponential(1) : mag.toFixed(1)) + '×';
@@ -847,13 +2031,91 @@
 
     // ---------- Main loop ----------
     let last = performance.now();
+    let last2 = 0;
 
     function frame(now) {
         // dt in units of one 60fps frame, clamped so tab-switches don't explode.
         const dt = Math.min((now - last) / (1000 / 60), 3);
         last = now;
 
+        // React to AA slider / dpr changes.
+        if (renderScale !== (window.devicePixelRatio || 1) * (CFG.aa || 1)) {
+            resize();
+        }
+
+        const tP0 = performance.now();
+
+        // Collision SDF maintenance: (re)bake when invalid, stale, or the
+        // player has wandered from the grid center; spread rows over frames.
+        if (!SDF.baking) {
+            let need = !SDF.valid ||
+                SDF.bakedIter !== CFG.iterations ||
+                SDF.bakedRadius !== CFG.radius;
+            if (!need && SDF.valid) {
+                const gcx = SDF.ox + (SDF_N / 2) * SDF.t;
+                const gcy = SDF.oy + (SDF_N / 2) * SDF.t;
+                const drift = Math.max(Math.abs(player.x - gcx), Math.abs(player.y - gcy));
+                need = drift > SDF_N * SDF.t * 0.22;
+            }
+            if (need) sdfScheduleBake();
+        }
+        if (SDF.baking) sdfBakeRows(8);
+
+        impactThisFrame = 0;
         update(dt);
+        const tP1 = performance.now();
+
+        // Landing juice: dust, thud, squash, camera shake — all scaled by
+        // how hard we hit.
+        if (impactThisFrame > CFG.maxSpeed * 0.04) {
+            const impact01 = Math.min(1, impactThisFrame / CFG.maxSpeed);
+            // Fan the dust along the actual contact normal (SDF) rather
+            // than the radial direction.
+            const out = lastNormal;
+            spawnDust(player.x - out.x * CFG.radius, player.y - out.y * CFG.radius, out, impact01);
+            sndLand(impact01);
+            anim.s = Math.max(0.3, 1 - impact01 * 0.65);
+            anim.v = 0;
+            shakeAmp = Math.max(shakeAmp, impact01 * 9);
+        }
+
+        // Squash/stretch spring back to round — stiffer and springier, so
+        // the blob visibly wobbles a few times after each hit.
+        anim.v += (1 - anim.s) * 0.35 * dt;
+        anim.v *= Math.pow(0.86, dt);
+        anim.s += anim.v * dt;
+
+        // Charging: coil down against the launch (drawn along the aim).
+        if (jump.charging) {
+            anim.s += (0.72 - anim.s) * (1 - Math.pow(0.85, dt));
+            anim.v *= Math.pow(0.7, dt);
+        }
+
+        // Particles.
+        for (let i = particles.length - 1; i >= 0; i--) {
+            const p = particles[i];
+            p.life += dt;
+            if (p.life >= p.maxLife) {
+                particles.splice(i, 1);
+                continue;
+            }
+            p.x += p.vx * dt;
+            p.y += p.vy * dt;
+            p.vx *= Math.pow(0.93, dt);
+            p.vy *= Math.pow(0.93, dt);
+        }
+
+        // Trail.
+        trail.push({ x: player.x, y: player.y });
+        if (trail.length > 26) trail.shift();
+
+        // Charge sound pitch follows the charge.
+        if (jump.charging && audio && audio.chargeOsc) {
+            audio.chargeOsc.frequency.setTargetAtTime(
+                150 + 480 * jump.charge, audio.ctx.currentTime, 0.03);
+        }
+
+        collectNearbyOrbs();
 
         // Smooth camera follow.
         const follow = 1 - Math.pow(1 - CFG.camFollow, dt);
@@ -869,8 +2131,28 @@
         while (dA < -Math.PI) dA += 2 * Math.PI;
         camAngle += dA * (1 - Math.pow(1 - CFG.rotFollow, dt));
 
+        // Ease zoom toward the wheel target.
+        zoom += (zoomTarget - zoom) * (1 - Math.pow(0.88, dt));
+
+        // Render-only camera = physics camera + decaying shake jitter.
+        shakeAmp *= Math.pow(0.82, dt);
+        if (shakeAmp < 0.05) shakeAmp = 0;
+        camRX = cameraX + (Math.random() * 2 - 1) * shakeAmp * zoom / w;
+        camRY = cameraY + (Math.random() * 2 - 1) * shakeAmp * zoom / w;
+
+        const tP2 = performance.now();
         renderFractal();
+        const tP3 = performance.now();
         renderOverlay();
+        const tP4 = performance.now();
+        window._perf = {
+            update: (tP1 - tP0).toFixed(1),
+            between: (tP2 - tP1).toFixed(1),
+            fractal: (tP3 - tP2).toFixed(1),
+            overlay: (tP4 - tP3).toFixed(1),
+            frameGap: (now - last2 || 0).toFixed(1)
+        };
+        last2 = now;
         updateHUD(now);
 
         requestAnimationFrame(frame);
@@ -881,8 +2163,38 @@
     // Debug hook for automated testing.
     window._dbg = {
         teleport(x, y) { player.x = x; player.y = y; player.vx = 0; player.vy = 0; },
+        snapCam() { cameraX = player.x; cameraY = player.y; camRX = cameraX; camRY = cameraY; },
         state() { return { x: player.x, y: player.y, vx: player.vx, vy: player.vy, camAngle, zoom }; },
-        setZoom(z) { zoom = z; },
+        setZoom(z) { zoom = z; zoomTarget = z; },
+        probe(x, y) { return { collides: collides(x, y), dist: distEst(x, y) }; },
+        sdf() {
+            return {
+                valid: SDF.valid, baking: SDF.baking, texel: SDF.t,
+                covers: SDF.valid && sdfCovers(player.x, player.y),
+                query: (SDF.valid && sdfCovers(player.x, player.y)) ? sdfQuery(player.x, player.y) : null
+            };
+        },
+        forceBake() {
+            const t0 = performance.now();
+            sdfScheduleBake();
+            while (SDF.baking) sdfBakeRows(SDF_N);
+            return { ms: (performance.now() - t0).toFixed(1) };
+        },
+        step(frames) {
+            // Advance the simulation synchronously (1 frame = 1/60s each).
+            for (let i = 0; i < frames; i++) {
+                impactThisFrame = 0;
+                update(1);
+            }
+            return { x: player.x, y: player.y, vx: player.vx, vy: player.vy };
+        },
+        benchFractal() {
+            const t0 = performance.now();
+            renderFractal();
+            const px = new Uint8Array(4);
+            gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+            return performance.now() - t0;
+        },
         cfg: CFG
     };
     </script>
