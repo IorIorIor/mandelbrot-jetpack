@@ -15,8 +15,8 @@ slingshotting through gravity wells.
 - **hold click / touch** — aim (toward the pointer) and charge a jump;
   release to fly
 - **SPACE** — hold to charge a straight-up jump
-- **← → / A D** — walk (tangentially, planet-style)
-- **scroll** — camera zoom (1× to 20,000,000×)
+- **← → / A D** — walk (on-screen buttons on touch devices)
+- **scroll / pinch** — camera zoom (1× to 20,000,000×)
 - **+ / −** — double / halve iteration depth
 - **R** — reset to spawn
 - **Tuning panel** — live sliders for physics, jumps, gravity wells,

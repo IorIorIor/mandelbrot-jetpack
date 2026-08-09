@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>Mandelbrot Jetpack</title>
     <style>
         * {
@@ -17,6 +17,8 @@
             color: #e0e6ff;
             overflow: hidden;
             height: 100vh;
+            overscroll-behavior: none;
+            -webkit-tap-highlight-color: transparent;
         }
 
         #glcanvas, #overlay {
@@ -48,6 +50,7 @@
             top: 24px;
             left: 24px;
             max-width: 250px;
+            display: none;   /* stats hidden for now */
         }
 
         .panel h3 {
@@ -89,11 +92,43 @@
 
         /* Tuning panel */
         .tuning {
-            top: 24px;
-            right: 24px;
+            top: 16px;
+            right: 16px;
             width: 270px;
-            max-height: calc(100vh - 48px);
+            max-width: 86vw;
+            max-height: calc(100vh - 32px);
             overflow-y: auto;
+        }
+
+        /* On-screen walk buttons for touch devices. */
+        .walkbtns {
+            position: fixed;
+            bottom: 20px;
+            left: 20px;
+            display: none;
+            gap: 16px;
+            z-index: 5;
+        }
+        @media (pointer: coarse) {
+            .walkbtns { display: flex; }
+        }
+        .wbtn {
+            width: 64px;
+            height: 64px;
+            border-radius: 50%;
+            background: rgba(15, 18, 40, 0.55);
+            border: 1px solid rgba(125, 211, 252, 0.35);
+            color: #7dd3fc;
+            font-size: 24px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            user-select: none;
+            -webkit-user-select: none;
+            touch-action: none;
+        }
+        .wbtn:active {
+            background: rgba(125, 211, 252, 0.3);
         }
 
         .tuning summary {
@@ -191,11 +226,24 @@
         </div>
     </div>
 
-    <details class="panel tuning" open>
-        <summary>Tuning</summary>
+    <details class="panel tuning">
+        <summary>⚙ settings</summary>
+        <div class="info">
+            <span class="key">hold &amp; drag</span> aim &amp; charge jump — release to fly<br>
+            <span class="key">← → / A D</span> or on-screen buttons: walk<br>
+            <span class="key">scroll / pinch</span> zoom<br>
+            <span class="key">SPACE</span> hold to charge straight up<br>
+            <span class="key">+ −</span> iterations · <span class="key">R</span> reset<br>
+            Collect orbs · surf the gravity wells!
+        </div>
         <div id="sliders"></div>
         <button id="resetTuning">restore defaults</button>
     </details>
+
+    <div class="walkbtns">
+        <div class="wbtn" id="walkL">◀</div>
+        <div class="wbtn" id="walkR">▶</div>
+    </div>
 
     <script>
     'use strict';
@@ -353,10 +401,14 @@
     });
 
     // w/h are CSS pixels; the GL canvas renders at dpr * SSAA scale and the
-    // browser's downscale does the antialiasing.
-    let w = 0, h = 0;
+    // browser's downscale does the antialiasing. Non-zero fallbacks so the
+    // math stays finite even if the page loads in a hidden (0x0) tab.
+    let w = 800, h = 600;
     let renderScale = 1;
     function resize() {
+        // A hidden tab/pane can report zero dimensions; latching those in
+        // poisons every screen-space transform with NaN. Keep old values.
+        if (window.innerWidth < 2 || window.innerHeight < 2) return;
         w = window.innerWidth;
         h = window.innerHeight;
         const dpr = window.devicePixelRatio || 1;
@@ -752,30 +804,87 @@
     });
 
     // Pointer (mouse/touch) aiming: press and hold anywhere on the canvas.
+    // A second finger turns the gesture into a pinch zoom instead.
+    const touches = new Map();
+    let pinching = false;
+    let pinchDist = 0;
+
+    function touchDist() {
+        const p = [...touches.values()];
+        return Math.hypot(p[0][0] - p[1][0], p[0][1] - p[1][1]);
+    }
+
+    function cancelCharge() {
+        jump.charging = false;
+        jump.charge = 0;
+        sndChargeStop();
+    }
+
     overlay.addEventListener('pointerdown', (e) => {
         e.preventDefault();
         audioInit();
-        jump.charging = true;
-        jump.viaKey = false;
-        jump.charge = 0;
-        jump.aimX = e.clientX;
-        jump.aimY = e.clientY;
-        sndChargeStart();
+        touches.set(e.pointerId, [e.clientX, e.clientY]);
+        if (touches.size === 2) {
+            cancelCharge();
+            pinching = true;
+            pinchDist = touchDist();
+        } else if (touches.size === 1) {
+            jump.charging = true;
+            jump.viaKey = false;
+            jump.charge = 0;
+            jump.aimX = e.clientX;
+            jump.aimY = e.clientY;
+            sndChargeStart();
+        }
     });
     window.addEventListener('pointermove', (e) => {
-        if (jump.charging && !jump.viaKey) {
+        if (touches.has(e.pointerId)) {
+            touches.set(e.pointerId, [e.clientX, e.clientY]);
+        }
+        if (pinching && touches.size >= 2) {
+            const d = touchDist();
+            if (d > 10 && pinchDist > 10) {
+                zoomTarget = Math.max(1.5e-7,
+                    Math.min(zoomTarget * pinchDist / d, 3));
+            }
+            pinchDist = d;
+        } else if (jump.charging && !jump.viaKey) {
             jump.aimX = e.clientX;
             jump.aimY = e.clientY;
         }
     });
-    window.addEventListener('pointerup', () => {
+    const pointerEnd = (e) => {
+        touches.delete(e.pointerId);
+        if (pinching) {
+            if (touches.size < 2) pinching = false;
+            return;
+        }
         if (jump.charging && !jump.viaKey) executeJump();
+    };
+    window.addEventListener('pointerup', pointerEnd);
+    window.addEventListener('pointercancel', (e) => {
+        touches.delete(e.pointerId);
+        if (touches.size < 2) pinching = false;
+        cancelCharge();
     });
-    window.addEventListener('pointercancel', () => {
-        jump.charging = false;
-        jump.charge = 0;
-        sndChargeStop();
-    });
+
+    // On-screen walk buttons (visible on touch devices via CSS).
+    function bindWalkButton(id, key) {
+        const el = document.getElementById(id);
+        const down = (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            audioInit();
+            keys[key] = true;
+        };
+        const up = () => { keys[key] = false; };
+        el.addEventListener('pointerdown', down);
+        el.addEventListener('pointerup', up);
+        el.addEventListener('pointercancel', up);
+        el.addEventListener('pointerleave', up);
+    }
+    bindWalkButton('walkL', 'arrowleft');
+    bindWalkButton('walkR', 'arrowright');
 
     document.addEventListener('wheel', (e) => {
         e.preventDefault();
@@ -2038,8 +2147,10 @@
         const dt = Math.min((now - last) / (1000 / 60), 3);
         last = now;
 
-        // React to AA slider / dpr changes.
-        if (renderScale !== (window.devicePixelRatio || 1) * (CFG.aa || 1)) {
+        // React to AA slider / dpr changes, and re-sync if the window came
+        // back from a hidden (zero-size) state.
+        if (renderScale !== (window.devicePixelRatio || 1) * (CFG.aa || 1) ||
+            w !== window.innerWidth || h !== window.innerHeight) {
             resize();
         }
 
